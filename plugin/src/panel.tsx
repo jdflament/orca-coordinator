@@ -160,7 +160,7 @@ export default function Panel() {
         <Heading level={2}>Coordinator</Heading>
         <Row gap="xs" align="center">
           <Badge tone="success">live</Badge>
-          <RelativeTime at={Date.parse(board.updatedAt ?? '') || Date.now()} muted size="xs" />
+          <RelativeTime at={Date.parse(board.updatedAt ?? '') || Date.now()} muted />
         </Row>
       </Row>
 
