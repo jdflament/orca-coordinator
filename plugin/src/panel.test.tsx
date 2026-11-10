@@ -21,7 +21,7 @@ test('shows the board: focus, decisions, repos, tasks, agents', async () => {
   })
   const view = await mount(panel, { host })
   assert.equal(view.find({ text: 'Ship the coordinator panel' })?.text, 'Ship the coordinator panel')
-  assert.ok(view.find({ text: 'Yes, enable it' }), 'pending decision shows its options')
+  assert.ok(view.find({ text: '★ Yes, enable it' }), 'pending decision shows its options')
   assert.ok(view.find({ text: 'jdflament/orca-coordinator' }), 'repos section renders')
 
   await view.press({ text: '★ Yes, enable it' })
@@ -46,8 +46,17 @@ test('follows board pushes and live agents', async () => {
     state: 'working',
     receivedAt: Date.now()
   })
+  await view.settled()
   assert.ok(view.find({ text: 'panel worker' }), 'live Orca agents appear')
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.refusals, [])
+  await view.unmount()
+})
+
+test('debug: dump the rendered tree', async () => {
+  const host = mockHost({ requests: { 'board.get': () => busySnapshot } })
+  const view = await mount(panel, { host })
+  console.log(view.summary())
+  console.log(JSON.stringify(view.tree(), null, 2).slice(0, 4000))
   await view.unmount()
 })

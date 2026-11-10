@@ -21,6 +21,8 @@ let watcher: fs.FSWatcher | null = null
 let poll: ReturnType<typeof setInterval> | null = null
 let debounce: ReturnType<typeof setTimeout> | null = null
 let lastMtime = 0
+/** Resolves once the initial board read has run; every handler awaits it. */
+let ready: Promise<void> = Promise.resolve()
 
 function expandHome(value: string): string {
   return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value
@@ -64,6 +66,7 @@ function scheduleRefresh(orca: OrcaWorkerApi): void {
     readBoard()
     orca.panels.post('board.changed', snapshot())
   }, DEBOUNCE_MS)
+  debounce.unref()
 }
 
 async function watch(orca: OrcaWorkerApi): Promise<void> {
@@ -101,12 +104,21 @@ async function watch(orca: OrcaWorkerApi): Promise<void> {
       scheduleRefresh(orca)
     }
   }, POLL_MS)
+  // Never keep a process alive just for the poll or the watcher: in the real
+  // worker Orca owns the lifetime; in tests and checks Node must be able to exit.
+  poll.unref()
+  watcher?.unref()
+  if (debounce) debounce.unref()
 }
 
 export default function activate(orca: OrcaWorkerApi): void {
-  orca.panels.handle('board.get', async () => snapshot())
+  orca.panels.handle('board.get', async () => {
+    await ready
+    return snapshot()
+  })
 
   orca.panels.handle('decision.respond', async ({ decisionId, optionId, note }) => {
+    await ready
     const decision = board?.decisions?.find((d) => d.id === decisionId)
     const optionLabel = decision?.options?.find((o) => o.id === optionId)?.label ?? optionId
     const at = new Date().toISOString()
@@ -120,10 +132,10 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
 
   orca.settings.onDidChange(({ key }) => {
-    if (key === 'boardPath') void watch(orca)
+    if (key === 'boardPath') ready = watch(orca)
   })
 
-  void watch(orca)
+  ready = watch(orca)
 }
 
 export function deactivate(): void {
