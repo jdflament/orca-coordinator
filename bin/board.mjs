@@ -319,6 +319,33 @@ const commands = {
     console.log(`${name} ${state}`)
   },
 
+  'agent:rm'(name) {
+    if (!name) throw new Error('usage: agent:rm <name>')
+    const board = load()
+    const agent = board.agents.find((a) => a.name === name)
+    if (!agent) throw new Error(`no agent named ${name}`)
+    if (name === 'coordinator') throw new Error('the coordinator stays on the board')
+    board.agents = board.agents.filter((a) => a.name !== name)
+    log(board, `agent removed: ${name}`)
+    save(board)
+    console.log(`${name} removed`)
+  },
+
+  clean() {
+    const board = load()
+    const open = (t) => t.status !== 'done'
+    const removed = board.agents
+      .filter((a) => a.name !== 'coordinator' && ['idle', 'stopped'].includes(a.state) && !board.tasks.some((t) => open(t) && t.assignee === a.name))
+      .map((a) => a.name)
+    if (removed.length) {
+      board.agents = board.agents.filter((a) => !removed.includes(a.name))
+      log(board, `agents cleaned: ${removed.join(', ')}`)
+      save(board)
+    }
+    if (removed.length) for (const name of removed) console.log(name)
+    else console.log('nothing to clean')
+  },
+
   'instruction:add'(text) {
     if (!text) throw new Error('usage: instruction:add <text> [--to <coordinator>]')
     const board = load()
@@ -455,6 +482,8 @@ commands:
   repo:add <name> [--kind repo|pr|feature] [--status planned|building|review|shipped|blocked] [--detail ..] [--url ..]
   repo:set <id> [--status planned|building|review|shipped|blocked] [--detail ..] [--url ..]
   agent:set <name> <idle|working|waiting|stopped> [--role ..] [--detail ..]
+  agent:rm <name>                     remove an agent from the board (never the coordinator)
+  clean                               prune idle agents with no open tasks
   instruction:add <text> [--to <coordinator>]   record a standing user instruction
   instruction:set <id> [--status active|done]
   ask <title> [--context ..] [--options "a|b"] [--recommend <label>]

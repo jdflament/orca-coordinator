@@ -38,6 +38,9 @@ emoji. If a name needs explaining, it is wrong.
 
 - **Subagent**: `<role>: <area>` — `explore: panel tests`,
   `review: jump button`.
+- **Orca worker**: verb + object — `--display-name "Update dispatch policy"`,
+  same for the task title. That name is the Orca tab title and the panel row:
+  it must say what the worker does, not which tool runs it.
 - **Task**: verb + object — `Add jump button to panel`, not `Panel polish`.
 - **Workstream / feature**: the user-facing outcome — `Coordinator panel`.
 - **Repo / PR**: `owner/repo`; PR titles verbatim.
@@ -51,8 +54,8 @@ in worker specs; never invent a second name for the same thing.
 
 | Work | Route it to |
 | ---- | ------------ |
-| Explore, read, digest, verify | Your own subagents — cheapest and fastest. Fire several in parallel in one message. |
-| A chunk of build/fix work you don't need to babysit | Orca worker: `ORCA orchestration worker-start --spec "<self-contained spec>" --worktree current --agent <agent>` |
+| Explore, read, digest, verify | Your own subagents — cheapest and fastest. Fire several in parallel in one message. Invisible to Orca: never give them build/fix work. |
+| Build/fix work you don't need to babysit | Always an Orca worker — never your own subagents: workers run in Orca terminals, show in the panel, and Orca wakes you when they report. `ORCA orchestration worker-start --spec "<self-contained spec>" --worktree current --agent <agent> --model <cheap>` |
 | Work that must run in its own checkout | Orca worker with `--worktree new-top-level --repo id:<repoId> --name <short>` |
 | Handoff with nothing expected back | `orca-cli` handoff — end your turn after it |
 | Small edits, one-file fixes | Often you, directly |
@@ -67,6 +70,17 @@ in worker specs; never invent a second name for the same thing.
 - Summarize a worker's evidence; rerun checks only on a gap or contradiction.
 - Track dispatched work on the board: `task:add ... --kind orca-worker`,
   `agent:set <name> working|idle`.
+
+## Model tiers
+
+- The coordinator runs on the smartest model available: it plans, decides, and
+  writes specs.
+- Workers applying an already-defined plan: cheapest capable model
+  (`--model <cheap>`).
+- Explore/read subagents: cheapest model too — they read and summarize, not
+  reason.
+
+Spend tokens on thinking, not on applying.
 
 ## Token discipline
 
@@ -118,11 +132,14 @@ as validation; a standing rule does not.
 
 1. `B inbox` + `B show` — absorb what changed: decision answers and quick
    actions (nudge/stop).
-2. Update statuses from overnight worker reports; settle Tasks.
-3. Dispatch everything independent, in parallel, then end your turn.
-4. When every worker has settled: report to the user per Task — outcome,
+2. Clean finished work off the board and Orca: `B clean` prunes idle agents
+   with no open tasks; close their worker terminals too
+   (`ORCA terminal close --terminal <handle>`).
+3. Update statuses from overnight worker reports; settle Tasks.
+4. Dispatch everything independent, in parallel, then end your turn.
+5. When every worker has settled: report to the user per Task — outcome,
    evidence, open blockers. Update the board before you speak.
-5. Lost track? `ORCA orchestration inbox --terminal run:<run_id> --limit 50`.
+6. Lost track? `ORCA orchestration inbox --terminal run:<run_id> --limit 50`.
 
 ## Standing rules
 
