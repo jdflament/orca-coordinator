@@ -1,0 +1,38 @@
+{
+  "manifestVersion": 2,
+  "id": "coordinator-overview",
+  "name": "Coordinator",
+  "version": "0.1.0",
+  "description": "Live overview of the coordinator board: workstreams, tasks, agents, and decisions waiting on you.",
+  "engines": {
+    "orca": ">=1.4.246"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "coordinator-overview",
+        "title": "Coordinator",
+        "icon": "bot",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "settings": [
+      {
+        "key": "boardPath",
+        "title": "Board file",
+        "description": "Absolute path (~/ allowed) to board.json in your coordinator repo.",
+        "type": "string",
+        "default": "~/Workspace/orca-coordinator/board/board.json"
+      }
+    ]
+  },
+  "capabilities": [
+    { "kind": "settings:own" },
+    { "kind": "agent:read" },
+    { "kind": "workspace:read" }
+  ]
+}

@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "focus": "",
+  "updatedAt": "2026-11-10T16:00:00.000Z",
+  "seq": { "task": 0, "decision": 0, "ws": 0, "repo": 0 },
+  "workstreams": [],
+  "tasks": [],
+  "repos": [],
+  "decisions": [],
+  "agents": [],
+  "log": []
+}
