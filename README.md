@@ -16,6 +16,8 @@ agent: OpenCode, Claude, Codex, …), this repo gives you the brain and the eyes
   features, tasks, repos/PRs, subagents, and agents running in Orca (read
   straight from Orca itself). Decision buttons write to the board's inbox.
 
+![Coordinator panel in Orca](docs/panel.png)
+
 ## Install
 
 ### 1. Board + skill
