@@ -20,6 +20,7 @@ const WS_STATES = ['planned', 'active', 'paused', 'done']
 const AGENT_STATES = ['idle', 'working', 'waiting', 'stopped']
 const REPO_STATES = ['planned', 'building', 'review', 'shipped', 'blocked']
 const REPO_KINDS = ['repo', 'pr', 'feature']
+const INSTRUCTION_STATES = ['active', 'done']
 
 const now = () => new Date().toISOString()
 
@@ -28,12 +29,13 @@ function emptyBoard() {
     version: 1,
     focus: '',
     updatedAt: now(),
-    seq: { task: 0, decision: 0, ws: 0 },
+    seq: { task: 0, decision: 0, ws: 0, instruction: 0 },
     workstreams: [],
     tasks: [],
     repos: [],
     decisions: [],
     agents: [],
+    instructions: [],
     log: []
   }
 }
@@ -94,6 +96,15 @@ function render(board) {
   lines.push('')
   lines.push(`**Focus:** ${board.focus || '—'}`)
   lines.push('')
+
+  if (board.instructions?.length) {
+    lines.push('## Instructions')
+    lines.push('')
+    for (const i of board.instructions) {
+      lines.push(`- ${i.status === 'done' ? '✅' : '▶'} ${i.text}${i.to ? ` — _to ${i.to}_` : ''}`)
+    }
+    lines.push('')
+  }
 
   if (board.workstreams.length) {
     lines.push('## Workstreams')
@@ -308,6 +319,37 @@ const commands = {
     console.log(`${name} ${state}`)
   },
 
+  'instruction:add'(text) {
+    if (!text) throw new Error('usage: instruction:add <text> [--to <coordinator>]')
+    const board = load()
+    const instruction = {
+      id: nextId(board, 'instruction', 'i'),
+      text,
+      to: option('to') || 'coordinator',
+      status: 'active',
+      createdAt: now()
+    }
+    board.instructions.push(instruction)
+    log(board, `instruction added: ${text}`)
+    save(board)
+    console.log(instruction.id)
+  },
+
+  'instruction:set'(id) {
+    if (!id) throw new Error('usage: instruction:set <id> [--status active|done]')
+    const board = load()
+    const instruction = findById(board.instructions, id)
+    const status = option('status')
+    if (status) {
+      if (!INSTRUCTION_STATES.includes(status)) throw new Error(`status must be one of ${INSTRUCTION_STATES.join('|')}`)
+      instruction.status = status
+      if (status === 'done') instruction.doneAt = now()
+    }
+    log(board, `instruction ${id} → ${instruction.status}`)
+    save(board)
+    console.log(`${instruction.id} ${instruction.status}`)
+  },
+
   ask(title) {
     if (!title) throw new Error('usage: ask <title> [--context ..] [--options "label1|label2"] [--recommend <index or label>]')
     const board = load()
@@ -357,7 +399,9 @@ const commands = {
     console.log('ok')
   },
 
-  // Decision clicks from the Orca panel land in inbox.jsonl; this drains them.
+  // Decision clicks and quick actions from the Orca panel land in inbox.jsonl;
+  // this drains them: decisions settle on the board, commands and messages are
+  // logged (and printed) for the coordinator to act on.
   inbox() {
     let lines = []
     try {
@@ -368,14 +412,23 @@ const commands = {
     const board = load()
     let applied = 0
     for (const entry of lines) {
-      const d = board.decisions.find((x) => x.id === entry.decisionId)
-      if (!d || d.status === 'answered') continue
-      d.status = 'answered'
-      d.answer = entry.optionLabel || entry.optionId
-      d.answeredAt = entry.at
-      d.source = 'panel'
-      log(board, `decision ${d.id} answered from panel: ${d.answer}`)
-      applied++
+      const kind = entry.kind || (entry.decisionId ? 'decision' : 'message')
+      if (kind === 'decision') {
+        const d = board.decisions.find((x) => x.id === entry.decisionId)
+        if (!d || d.status === 'answered') continue
+        d.status = 'answered'
+        d.answer = entry.optionLabel || entry.optionId
+        d.answeredAt = entry.at
+        d.source = 'panel'
+        log(board, `decision ${d.id} answered from panel: ${d.answer}`)
+        applied++
+      } else if (kind === 'command') {
+        log(board, `user command: ${entry.command} ${entry.target ?? ''}`.trim())
+        applied++
+      } else {
+        log(board, `user message: ${entry.text}`)
+        applied++
+      }
     }
     if (applied) save(board)
     if (lines.length) fs.writeFileSync(INBOX_FILE, '')
@@ -402,6 +455,8 @@ commands:
   repo:add <name> [--kind repo|pr|feature] [--status planned|building|review|shipped|blocked] [--detail ..] [--url ..]
   repo:set <id> [--status planned|building|review|shipped|blocked] [--detail ..] [--url ..]
   agent:set <name> <idle|working|waiting|stopped> [--role ..] [--detail ..]
+  instruction:add <text> [--to <coordinator>]   record a standing user instruction
+  instruction:set <id> [--status active|done]
   ask <title> [--context ..] [--options "a|b"] [--recommend <label>]
   answer <decisionId> <optionId|label> [--note ..]
   log <text>                          append a log entry

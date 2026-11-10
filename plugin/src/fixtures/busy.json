@@ -2,19 +2,27 @@
   "version": 1,
   "focus": "Ship the coordinator panel",
   "updatedAt": "2026-11-10T16:00:00.000Z",
-  "seq": { "task": 3, "decision": 2, "ws": 2, "repo": 2 },
+  "seq": { "task": 6, "decision": 2, "ws": 2, "repo": 2, "instruction": 3 },
+  "instructions": [
+    { "id": "i1", "text": "Keep the panel concise — buttons only, no filler", "to": "coordinator", "status": "active", "createdAt": "2026-11-10T15:00:00.000Z" },
+    { "id": "i2", "text": "Commit and push only after explicit validation", "to": "coordinator", "status": "active", "createdAt": "2026-11-10T15:30:00.000Z" },
+    { "id": "i3", "text": "Public, reusable, agent-agnostic repo", "to": "coordinator", "status": "done", "createdAt": "2026-11-10T14:00:00.000Z" }
+  ],
   "workstreams": [
     { "id": "ws1", "title": "Coordinator setup", "status": "active", "progress": 60, "owner": "coordinator", "notes": "Charter, board CLI, GitHub repo" },
-    { "id": "ws2", "title": "Panel polish", "status": "planned", "progress": null, "owner": "", "notes": "Shots and tweaks" }
+    { "id": "ws2", "title": "Coordinator panel layout", "status": "planned", "progress": null, "owner": "", "notes": "Screenshot and spacing tweaks" }
   ],
   "tasks": [
     { "id": "t1", "title": "Scaffold repo + board CLI", "status": "done", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "" },
     { "id": "t2", "title": "Build Orca worker-panel plugin", "status": "active", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "board.get + decision.respond + live refresh" },
-    { "id": "t3", "title": "Validate, test, screenshot plugin", "status": "blocked", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "waiting on worker tests" }
+    { "id": "t3", "title": "Validate, test, screenshot plugin", "status": "blocked", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "waiting on worker tests" },
+    { "id": "t4", "title": "Board CLI: repos/PRs section", "status": "done", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "" },
+    { "id": "t5", "title": "Coordinator skill (agent-agnostic)", "status": "done", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "" },
+    { "id": "t6", "title": "Write quickstart for the panel", "status": "queued", "kind": "self", "assignee": "", "ws": "ws2", "detail": "" }
   ],
   "repos": [
     { "id": "r1", "name": "jdflament/orca-coordinator", "kind": "repo", "status": "building", "detail": "Coordinator brain + Orca panel", "url": "https://github.com/jdflament/orca-coordinator" },
-    { "id": "r2", "name": "#12 Panel polish", "kind": "pr", "status": "review", "detail": "Shots and tweaks", "url": "" }
+    { "id": "r2", "name": "#12 Coordinator panel layout", "kind": "pr", "status": "review", "detail": "Screenshot and spacing tweaks", "url": "" }
   ],
   "decisions": [
     {
@@ -45,7 +53,7 @@
   ],
   "agents": [
     { "id": "coordinator", "name": "coordinator", "role": "brain", "state": "working", "detail": "Setting up orchestration + panel", "updatedAt": "2026-11-10T16:00:00.000Z" },
-    { "id": "explorer", "name": "explorer", "role": "worker", "state": "idle", "detail": "Digesting plugin docs", "updatedAt": "2026-11-10T16:00:00.000Z" }
+    { "id": "explore-plugin-docs", "name": "explore: plugin docs", "role": "worker", "state": "idle", "detail": "Reading Orca plugin docs", "updatedAt": "2026-11-10T16:00:00.000Z" }
   ],
   "log": [
     { "at": "2026-11-10T15:58:00.000Z", "text": "decision raised: Public or private repo?" },

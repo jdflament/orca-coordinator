@@ -8,9 +8,12 @@ import {
   Box,
   Button,
   Card,
+  Collapsible,
   EmptyState,
+  Grid,
   Heading,
   host,
+  IconButton,
   List,
   ListItem,
   on,
@@ -27,14 +30,19 @@ import {
 } from 'orca'
 import type { BoardDecision, BoardOption, BoardSnapshot } from './protocol'
 
+/** Done tasks kept in the collapsible before the "… and N older" note. */
+const DONE_SHOWN = 15
+
 /** The worker's last answer; null until it starts. */
 const snapshot = atom<BoardSnapshot | null>(null)
 /** Decisions this panel already reported to the worker (survives reloads). */
 const answered = atom('answered', {} as Record<string, string>, { persist: 'plugin' })
 /** Agents running in Orca terminals, straight from the host. */
 const liveAgents = atom<{ terminalId?: string; title?: string; agent?: string; state: string }[]>([])
-/** A transient message for the latest failed decision click. */
+/** A transient message for the latest failed action. */
 const failure = atom('')
+/** Whether the coordinator's tab is the one on screen; null = unknown. */
+const onCoordinatorTab = atom<boolean | null>(null)
 
 async function respond(decision: BoardDecision, option: BoardOption): Promise<void> {
   try {
@@ -45,6 +53,30 @@ async function respond(decision: BoardDecision, option: BoardOption): Promise<vo
     set(failure, `could not record your choice: ${(err as Error).message}`)
   }
 }
+
+/** Quick actions queue into the inbox; the coordinator acts on its next turn. */
+async function sendCommand(command: string, target: string): Promise<void> {
+  try {
+    await plugin.request('command.send', { command, target })
+    set(failure, '')
+  } catch (err) {
+    set(failure, `could not send ${command}: ${(err as Error).message}`)
+  }
+}
+
+/** The worker resolves the coordinator terminal and brings it to the front. */
+async function focusCoordinator(): Promise<void> {
+  try {
+    const result = await plugin.request('coordinator.focus', {})
+    set(failure, result.ok ? '' : result.error || 'could not find the coordinator terminal')
+    if (result.ok) set(onCoordinatorTab, true)
+  } catch (err) {
+    set(failure, `could not jump to the coordinator: ${(err as Error).message}`)
+  }
+}
+
+/** Where the jump button lives while the panel is open. */
+const VISIBLE_POLL_MS = 3000
 
 /** Runs once before the first render; subscriptions end with the panel. */
 export function setup(ctx: PanelContext): void {
@@ -77,6 +109,22 @@ export function setup(ctx: PanelContext): void {
     (payload) => set(snapshot, payload),
     (err) => set(snapshot, { board: null, error: `worker failed: ${(err as Error).message}`, boardPath: '' })
   )
+  // "Is the coordinator's tab on screen?" — polled so the jump button hides
+  // while the user is already looking at the coordinator.
+  const refreshVisible = async (): Promise<void> => {
+    try {
+      const result = await plugin.request('coordinator.visible')
+      if (result.ok) set(onCoordinatorTab, result.visible)
+    } catch {
+      // keep the last answer
+    }
+  }
+  void refreshVisible()
+  const poll = setInterval(() => void refreshVisible(), VISIBLE_POLL_MS)
+  if (typeof (poll as { unref?: () => void }).unref === 'function') {
+    ;(poll as { unref?: () => void }).unref()
+  }
+  ctx.subscriptions.push({ dispose: () => clearInterval(poll as unknown as number) })
 }
 
 function statusTone(status: string): string {
@@ -122,6 +170,18 @@ function DecisionCard({ decision }: { decision: BoardDecision }) {
   )
 }
 
+function StopButton({ target, label }: { target: string; label: string }) {
+  return (
+    <IconButton
+      icon="stop"
+      label={`Stop ${label}`}
+      tooltip="Ask the coordinator to stop this agent"
+      size="sm"
+      onPress={() => void sendCommand('stop', target)}
+    />
+  )
+}
+
 export default function Panel() {
   const current = read(snapshot)
   const failureText = read(failure)
@@ -149,10 +209,16 @@ export default function Panel() {
   const workstreams = board.workstreams ?? []
   const repos = board.repos ?? []
   const subagents = board.agents ?? []
+  const instructions = (board.instructions ?? []).filter((i) => i.status !== 'done')
   const live = read(liveAgents)
+  const openTasks = tasks.filter((t) => t.status !== 'done')
+  const doneTasks = tasks.filter((t) => t.status === 'done')
   const active = tasks.filter((t) => t.status === 'active').length
   const blocked = tasks.filter((t) => t.status === 'blocked').length
+  const queued = tasks.filter((t) => t.status === 'queued').length
   const busy = live.filter((a) => a.state === 'working').length + subagents.filter((a) => a.state === 'working').length
+  /** Nothing in flight: the panel falls back to just focus + what needs the user. */
+  const idle = openTasks.length === 0 && busy === 0
 
   return (
     <Stack gap="md">
@@ -164,32 +230,50 @@ export default function Panel() {
         </Row>
       </Row>
 
-      <Text muted size="sm" truncate>
-        {board.focus || 'No focus set'}
-      </Text>
+      {board.focus ? (
+        <Text muted size="sm" truncate>
+          {board.focus}
+        </Text>
+      ) : null}
 
-      <Stack gap="sm">
-        <Heading level={3}>Needs you</Heading>
-        {pending.length === 0 ? (
-          <Text muted size="xs">
-            Nothing waiting on you.
-          </Text>
-        ) : (
-          pending.map((decision) => <DecisionCard key={decision.id} decision={decision} />)
-        )}
-      </Stack>
+      {openTasks.length > 0 ? (
+        <Grid columns={3} gap="sm">
+          <Card title="Active">
+            <Badge tone="accent">{active}</Badge>
+          </Card>
+          <Card title="Blocked">
+            <Badge tone={blocked > 0 ? 'warning' : 'neutral'}>{blocked}</Badge>
+          </Card>
+          <Card title="Queued">
+            <Badge tone="neutral">{queued}</Badge>
+          </Card>
+        </Grid>
+      ) : null}
 
-      <Row gap="sm">
-        <Card title="Active">
-          <Badge tone="accent">{active}</Badge>
-        </Card>
-        <Card title="Blocked">
-          <Badge tone={blocked > 0 ? 'warning' : 'neutral'}>{blocked}</Badge>
-        </Card>
-        <Card title="Agents busy">
-          <Badge tone={busy > 0 ? 'accent' : 'neutral'}>{busy}</Badge>
-        </Card>
-      </Row>
+      {!idle && instructions.length > 0 ? (
+        <Stack gap="xs">
+          <Heading level={3}>Instructions</Heading>
+          <List label="Instructions">
+            {instructions.map((instruction) => (
+              <ListItem
+                key={instruction.id}
+                title={instruction.text}
+                description={instruction.to || undefined}
+                icon="lightbulb"
+              />
+            ))}
+          </List>
+        </Stack>
+      ) : null}
+
+      {pending.length > 0 ? (
+        <Stack gap="sm">
+          <Heading level={3}>Needs you</Heading>
+          {pending.map((decision) => (
+            <DecisionCard key={decision.id} decision={decision} />
+          ))}
+        </Stack>
+      ) : null}
 
       {workstreams.length > 0 ? (
         <Stack gap="xs">
@@ -201,7 +285,7 @@ export default function Panel() {
                   <Badge tone={statusTone(ws.status)}>{ws.status}</Badge>
                   {ws.progress != null ? (
                     <Box grow>
-                      <Progress label={`${ws.progress}%`} labelHidden value={ws.progress} />
+                      <Progress label={`${ws.progress}%`} value={ws.progress} />
                     </Box>
                   ) : null}
                 </Row>
@@ -229,27 +313,12 @@ export default function Panel() {
         </Stack>
       ) : null}
 
-      {tasks.length > 0 ? (
-        <Stack gap="xs">
-          <Heading level={3}>Tasks</Heading>
-          <List label="Tasks">
-            {tasks.map((task) => (
-              <ListItem
-                key={task.id}
-                title={task.title}
-                description={[task.assignee, task.detail].filter(Boolean).join(' · ') || undefined}
-                icon={task.status === 'done' ? 'check' : task.status === 'blocked' ? 'warning' : 'play'}
-              >
-                <Badge tone={statusTone(task.status)}>{task.status}</Badge>
-              </ListItem>
-            ))}
-          </List>
-        </Stack>
-      ) : null}
-
       {subagents.length > 0 || live.length > 0 ? (
         <Stack gap="xs">
-          <Heading level={3}>Agents</Heading>
+          <Row justify="between" align="center">
+            <Heading level={3}>Agents</Heading>
+            {busy > 0 ? <Badge tone="accent">{busy} working</Badge> : null}
+          </Row>
           <List label="Agents">
             {subagents.map((agent) => (
               <ListItem
@@ -258,7 +327,12 @@ export default function Panel() {
                 description={[agent.role, agent.detail].filter(Boolean).join(' · ') || undefined}
                 icon="agent"
               >
-                <Badge tone={statusTone(agent.state)}>{agent.state}</Badge>
+                <Row justify="between" align="center" gap="sm">
+                  <Badge tone={statusTone(agent.state)}>{agent.state}</Badge>
+                  {agent.state === 'working' ? (
+                    <StopButton target={agent.name} label={agent.name} />
+                  ) : null}
+                </Row>
               </ListItem>
             ))}
             {live.map((agent) => (
@@ -268,10 +342,65 @@ export default function Panel() {
                 description={agent.agent || 'Orca terminal'}
                 icon="terminal"
               >
-                <Badge tone={statusTone(agent.state)}>{agent.state}</Badge>
+                <Row justify="between" align="center" gap="sm">
+                  <Badge tone={statusTone(agent.state)}>{agent.state}</Badge>
+                  {agent.state === 'working' ? (
+                    <StopButton target={agent.terminalId ?? ''} label={agent.title ?? 'agent'} />
+                  ) : null}
+                </Row>
               </ListItem>
             ))}
           </List>
+        </Stack>
+      ) : null}
+
+      {tasks.length > 0 ? (
+        <Stack gap="xs">
+          <Heading level={3}>Tasks</Heading>
+          <List label="Open tasks">
+            {openTasks.map((task) => (
+              <ListItem
+                key={task.id}
+                title={task.title}
+                description={[task.assignee, task.detail].filter(Boolean).join(' · ') || undefined}
+                icon={task.status === 'blocked' ? 'warning' : 'play'}
+              >
+                <Row justify="between" align="center" gap="sm">
+                  <Badge tone={statusTone(task.status)}>{task.status}</Badge>
+                  {task.status === 'blocked' ? (
+                    <IconButton
+                      icon="zap"
+                      label={`Nudge ${task.id}`}
+                      tooltip="Ask the coordinator to unblock and retry"
+                      size="sm"
+                      onPress={() => void sendCommand('nudge', task.id)}
+                    />
+                  ) : null}
+                </Row>
+              </ListItem>
+            ))}
+          </List>
+          {doneTasks.length > 0 ? (
+            <Collapsible title={`Done (${doneTasks.length})`}>
+              <List label="Done tasks">
+                {doneTasks.slice(-DONE_SHOWN).reverse().map((task) => (
+                  <ListItem
+                    key={task.id}
+                    title={task.title}
+                    description={task.assignee || undefined}
+                    icon="check"
+                  >
+                    <Badge>done</Badge>
+                  </ListItem>
+                ))}
+              </List>
+              {doneTasks.length > DONE_SHOWN ? (
+                <Text muted size="xs">
+                  … and {doneTasks.length - DONE_SHOWN} older
+                </Text>
+              ) : null}
+            </Collapsible>
+          ) : null}
         </Stack>
       ) : null}
 
@@ -283,7 +412,7 @@ export default function Panel() {
         </Card>
       ) : null}
 
-      {(board.log ?? []).length > 0 ? (
+      {!idle && (board.log ?? []).length > 0 ? (
         <Stack gap="xs">
           <Heading level={3}>Log</Heading>
           {(board.log ?? []).slice(-6).map((entry) => (
@@ -292,6 +421,12 @@ export default function Panel() {
             </Text>
           ))}
         </Stack>
+      ) : null}
+
+      {read(onCoordinatorTab) === false ? (
+        <Button variant="outline" tone="neutral" onPress={() => void focusCoordinator()}>
+          Jump to coordinator
+        </Button>
       ) : null}
     </Stack>
   )

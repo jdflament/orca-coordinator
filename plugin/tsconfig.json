@@ -1,5 +1,8 @@
 {
   "extends": "./.orca/types/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
   "include": [
     "src"
   ]

@@ -54,6 +54,15 @@ export interface BoardAgent {
   updatedAt?: string
 }
 
+/** A standing instruction the user gave the coordinator. */
+export interface BoardInstruction {
+  id: string
+  text: string
+  to?: string
+  status: string
+  createdAt?: string
+}
+
 export interface Board {
   version: number
   focus?: string
@@ -63,6 +72,7 @@ export interface Board {
   repos?: BoardRepo[]
   decisions?: BoardDecision[]
   agents?: BoardAgent[]
+  instructions?: BoardInstruction[]
   log?: { at: string; text: string }[]
 }
 
@@ -81,6 +91,20 @@ declare module 'orca' {
     'decision.respond': {
       input: { decisionId: string; optionId: string; note?: string }
       output: { ok: boolean; at: string; optionLabel: string }
+    }
+    /** Queues a quick action: nudge (unblock a task), stop (an agent), … */
+    'command.send': {
+      input: { command: 'nudge' | 'stop' | string; target: string }
+      output: { ok: boolean; at: string }
+    }
+    /** Brings the coordinator's terminal to the front in Orca. */
+    'coordinator.focus': {
+      input: { terminal?: string }
+      output: { ok: boolean; terminal?: string; title?: string; error?: string }
+    }
+    /** Whether the coordinator's terminal is the tab on screen right now. */
+    'coordinator.visible': {
+      output: { ok: boolean; visible: boolean }
     }
   }
   interface PluginPanelEvents {

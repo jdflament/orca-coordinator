@@ -1,2 +1,4 @@
 board/
 .DS_Store
+# Guard against a stray `tsc` run emitting next to the .ts sources
+plugin/src/*.js

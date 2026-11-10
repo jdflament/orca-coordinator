@@ -4,9 +4,10 @@ A coordinator setup for agent-driven work: **you are the coordinator** (the
 agent: OpenCode, Claude, Codex, …), this repo gives you the brain and the eyes.
 
 - **`skill/coordinator/SKILL.md`** — the coordinator operating loop: dispatch
-  policy (subagents vs Orca workers vs handoffs), token discipline, when to
-  escalate decisions to the human. Agent-agnostic; install it in any agent
-  that supports skills (or paste it into system instructions).
+  policy (subagents vs Orca workers vs handoffs), token discipline, plain and
+  explicit naming, when to escalate decisions to the human. Agent-agnostic;
+  install it in any agent that supports skills (or paste it into system
+  instructions).
 - **`bin/board.mjs`** — the board CLI. One JSON file (`board/board.json`) holds
   focus, workstreams/features, tasks, repos/PRs, subagent states, decisions and
   a log. `board.json` is local state: it is gitignored, so nothing sensitive
@@ -15,8 +16,6 @@ agent: OpenCode, Claude, Codex, …), this repo gives you the brain and the eyes
   overview of what the coordinator is doing — what needs your action,
   features, tasks, repos/PRs, subagents, and agents running in Orca (read
   straight from Orca itself). Decision buttons write to the board's inbox.
-
-![Coordinator panel in Orca](docs/panel.png)
 
 ## Install
 
@@ -55,14 +54,42 @@ agent status, read workspace.
 ```text
 board.mjs show [--json]      print BOARD.md (or raw JSON)
 board.mjs focus <text>       set the current focus line
+board.mjs instruction:add|instruction:set  standing user instructions (shown in the panel)
 board.mjs ws:add|ws:set      workstreams (features): status, progress
 board.mjs task:add|task:set  tasks: queued|active|blocked|done, assignee, kind
 board.mjs repo:add|repo:set  repos / PRs / features: status, detail, url
 board.mjs agent:set          subagent registry: idle|working|waiting|stopped
 board.mjs ask|answer         decisions (recommended option shows starred in the panel)
-board.mjs inbox              drain the panel's decision clicks into the board
+board.mjs inbox              drain the panel's decision clicks and quick actions
 board.mjs log <text>         append a log entry
 ```
+
+## Panel quick actions
+
+The panel is buttons only — no text box; you talk to the agent in chat:
+
+- **Jump to coordinator** — brings the coordinator's terminal to the front.
+  The worker resolves it from the **Coordinator terminal** setting: a title
+  substring (default `coordinator`) or a `term_…` handle.
+- **Answer decisions** — the buttons on each decision card (approve/deny or
+  whatever options the coordinator raised).
+- **Nudge a blocked task** — ⚡ button on a blocked task: asks the coordinator
+  to unblock and retry it.
+- **Stop a busy agent** — ■ button on a working agent.
+
+Everything is written to `board/inbox.jsonl` and applied when the coordinator
+next runs `bin/board.mjs inbox` (each turn). Done tasks fold away behind a
+"Done (N)" collapsible so history can grow without filling the panel.
+
+The panel also shows the **standing instructions** you gave the coordinator
+(`instruction:add` on the board) — active ones up top, done ones drop away —
+and the **Jump to coordinator** button at the bottom appears only when you
+are not already on the coordinator's tab.
+
+## Git policy
+
+The coordinator never commits or pushes on its own: it shows you what
+changed and waits for your validation (see `skill/coordinator/SKILL.md`).
 
 ## Layout
 

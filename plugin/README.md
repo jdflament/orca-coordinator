@@ -8,6 +8,7 @@ board's inbox (`board/inbox.jsonl`), which the coordinator drains with
 
 - No build step: Orca transpiles `src/worker.ts` and `src/panel.tsx` as written.
 - Settings: **Board file** (absolute path, `~/` allowed) — the panel follows
-  the file live.
+  the file live. **Coordinator terminal** — title substring (default
+  `coordinator`) or `term_…` handle used by the **Jump to coordinator** button.
 - Test with `orca plugin test .`, check with `orca plugin check .`.
 - Board fixtures for tests live in `src/fixtures/`.

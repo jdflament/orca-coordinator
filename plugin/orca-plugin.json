@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "coordinator-overview",
   "name": "Coordinator",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Live overview of the coordinator board: workstreams, tasks, agents, and decisions waiting on you.",
   "engines": {
     "orca": ">=1.4.246"
@@ -27,6 +27,13 @@
         "description": "Absolute path (~/ allowed) to board.json in your coordinator repo.",
         "type": "string",
         "default": "~/Workspace/orca-coordinator/board/board.json"
+      },
+      {
+        "key": "coordinatorTerminal",
+        "title": "Coordinator terminal",
+        "description": "Terminal title substring (or term_ handle) the \"Jump to coordinator\" button opens. Empty matches the first title containing \"coordinator\".",
+        "type": "string",
+        "default": ""
       }
     ]
   },

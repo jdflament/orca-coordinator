@@ -24,6 +24,29 @@ truth. Keep it terse; never keep long-lived state in your head or in chat.
   `repo:set`, `agent:set`, `focus`, `log`). Cheap calls, do them as you go.
 - The user watches the board through the Orca panel: it reads the same file.
 
+## Standing instructions
+
+When the user gives you a lasting instruction (a rule, a preference, a
+constraint), record it: `B instruction:add "<text>" --to <coordinator>` —
+the panel shows the user what they asked of each coordinator. Mark it done
+when it no longer applies: `B instruction:set <id> --status done`.
+
+## Naming — plain and explicit
+
+Every name says what the thing is. No codenames, metaphors, random words, or
+emoji. If a name needs explaining, it is wrong.
+
+- **Subagent**: `<role>: <area>` — `explore: panel tests`,
+  `review: jump button`.
+- **Task**: verb + object — `Add jump button to panel`, not `Panel polish`.
+- **Workstream / feature**: the user-facing outcome — `Coordinator panel`.
+- **Repo / PR**: `owner/repo`; PR titles verbatim.
+- **Decision**: the question itself, with concrete options.
+- **Agent detail**: the current fact, not a mood.
+
+Keep names under ~60 characters. Use the same name in chat, on the board, and
+in worker specs; never invent a second name for the same thing.
+
 ## Dispatch policy — pick the cheapest tool that fits
 
 | Work | Route it to |
@@ -56,8 +79,10 @@ truth. Keep it terse; never keep long-lived state in your head or in chat.
 
 Act on your own for anything reversible and in-scope. Ask the user when:
 
-- Irreversible or sensitive: spend money, delete data, force-push, publish,
-  create public repos/PRs, approve access, install code, send external messages.
+- Irreversible or sensitive: spend money, delete data, force-push, commit,
+  push, publish, create public repos/PRs, approve access, install code, send
+  external messages. Git operations need the user's explicit validation each
+  time — never commit or push on a standing rule.
 - Ambiguous direction, conflicting constraints, or scope changes.
 - A worker fails twice on the same thing.
 
@@ -66,9 +91,33 @@ then ask in chat too. The user answers in chat or by clicking the panel; both
 land on the board (`answer` command or panel inbox). Do not block: queue the
 ask, keep dispatching independent work, consume the answer when it arrives.
 
+## Panel quick actions — user input via `B inbox`
+
+The Orca panel has no text box: the user acts with buttons only, on things
+that need them. Everything queues into `board/inbox.jsonl` and `B inbox`
+prints it; act on it the same turn:
+
+- **Decision buttons** — answers a pending `ask` (approve/deny/choose).
+- **Nudge** (on a blocked task) — unblock and retry that task; find out what
+  blocked it before re-dispatching.
+- **Stop** (on a busy agent) — stop that agent. For an Orca worker use
+  `ORCA orchestration worker-stop --dispatch <id>`; for one of your own
+  subagents, let the run finish or drop the result and mark it stopped on
+  the board. Confirm the intent was really "stop" if the target is unclear.
+
+The user talks to you in chat, not through the panel.
+
+## Git — validation gate
+
+Never commit, push, publish, merge or delete on your own initiative. Make
+the change, show the user what changed (files, intent), and wait for their
+explicit validation. An explicit user instruction in the current task counts
+as validation; a standing rule does not.
+
 ## Turn rhythm
 
-1. `B inbox` + `B show` — absorb what changed (answers, new asks).
+1. `B inbox` + `B show` — absorb what changed: decision answers and quick
+   actions (nudge/stop).
 2. Update statuses from overnight worker reports; settle Tasks.
 3. Dispatch everything independent, in parallel, then end your turn.
 4. When every worker has settled: report to the user per Task — outcome,
