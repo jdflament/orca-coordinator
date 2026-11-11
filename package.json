@@ -1,0 +1,29 @@
+{
+  "name": "orca-coordinator",
+  "version": "1.0.0",
+  "description": "Your coordinator agent in Orca: an Orca plugin that sets up the coordinator, its rules, board, playbooks and automations, and shows the board.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jdflament/orca-coordinator.git"
+  },
+  "homepage": "https://github.com/jdflament/orca-coordinator#readme",
+  "type": "module",
+  "bin": {
+    "orca-coordinator": "bin/coordinator.mjs"
+  },
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "test": "node --test \"test/**/*.test.mjs\"",
+    "types": "orca plugin types . && rm -rf types/orca-plugin && cp -R .orca/types types/orca-plugin",
+    "typecheck": "([ -f .orca/types/tsconfig.json ] || (mkdir -p .orca && cp -R types/orca-plugin .orca/types)) && tsc -p plugin/tsconfig.json",
+    "test:plugin": "orca plugin test .",
+    "check": "node --test \"test/**/*.test.mjs\" && npm run typecheck && orca plugin validate . && orca plugin test ."
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.5",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,261 +1,377 @@
-// The plugin's own worker: reads board/board.json from the coordinator repo,
-// pushes it to every open panel when it changes, and records decision clicks
-// into inbox.jsonl so the coordinator agent can drain them with bin/board.mjs.
-//
-// Orca transpiles this file when it loads (no build step). A save restarts the
-// worker and drops its in-memory state, so everything is re-derived in activate().
+// The plugin's worker: reads board.json from the coordinator state folder, adds the live
+// Orca workers and the coordinator's liveness, and forwards panel clicks to the coordinator
+// terminal (or queues them in inbox.jsonl when no coordinator is live). Before the coordinator
+// is set up, it offers the setup instead (see setup.ts).
 import { execFile } from 'node:child_process'
-import fs from 'node:fs'
+import { appendFileSync, mkdirSync } from 'node:fs'
+import { readdir, readFile, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
-import type { Board, BoardSnapshot } from './protocol'
+import type { Board, BoardView, CleanupResult, LiveWorker, LocalWork } from './protocol'
+import { configFile, getSetupStatus, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, updateIfInstalledHere } from './setup'
+import type { CoordinatorConfig } from './setup'
 
-const DEFAULT_BOARD_PATH = '~/Workspace/orca-coordinator/board/board.json'
-const DEFAULT_COORDINATOR_TERMINAL = 'coordinator'
-const DEBOUNCE_MS = 300
-const POLL_MS = 4000
+const DEFAULT_DIR = '~/.local/state/orca-coordinator'
+const FINISHED_STATES = ['succeeded', 'failed', 'stopped']
 
-let boardPath = ''
-let board: Board | null = null
-let error = ''
-let watcher: fs.FSWatcher | null = null
-let poll: ReturnType<typeof setInterval> | null = null
-let debounce: ReturnType<typeof setTimeout> | null = null
-let lastMtime = 0
-/** Resolves once the initial board read has run; every handler awaits it. */
-let ready: Promise<void> = Promise.resolve()
+let settings: { get(key: string): Promise<unknown> } | null = null
+let host: OrcaWorkerApi['host'] | null = null
 
 function expandHome(value: string): string {
   return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value
 }
 
-interface TerminalInfo {
-  handle: string
-  title?: string
-  tabId?: string
+async function stateDir(): Promise<string> {
+  const configured = await settings?.get('coordinatorDir')
+  return expandHome(typeof configured === 'string' && configured.trim() ? configured.trim() : DEFAULT_DIR)
 }
 
-interface VisualLayout {
-  root?: { activeTabId?: string }
-}
-
-/** The Orca CLI that ships with the app; the worker may not inherit PATH. */
-function orcaCli(): string {
-  const dir = process.env.ORCA_CLI_BIN_DIR
-  if (dir) return path.join(dir, 'orca')
+/** The Orca CLI: the setting, else $ORCA_CLI_BIN_DIR, else the app's bundled CLI on macOS, else PATH. */
+async function orcaCli(): Promise<string> {
+  const configured = await settings?.get('orcaBin')
+  if (typeof configured === 'string' && configured.trim()) return expandHome(configured.trim())
+  if (process.env.ORCA_CLI_BIN_DIR) return path.join(process.env.ORCA_CLI_BIN_DIR, 'orca')
   return process.platform === 'darwin' ? '/Applications/Orca.app/Contents/Resources/bin/orca' : 'orca'
 }
 
-function runOrca(args: string[]): Promise<string> {
+async function runOrca(args: string[], timeout = 10000): Promise<string> {
+  const cli = await orcaCli()
   return new Promise((resolve, reject) => {
-    execFile(orcaCli(), args, { timeout: 8000, maxBuffer: 4 * 1024 * 1024 }, (err, stdout) => {
-      if (err) reject(err)
-      else resolve(String(stdout))
+    execFile(cli, args, { timeout, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => (error ? reject(error) : resolve(String(stdout))))
+  })
+}
+
+async function runOrcaJson(args: string[]): Promise<{ result?: Record<string, unknown> }> {
+  return JSON.parse(await runOrca([...args, '--json'])) as { result?: Record<string, unknown> }
+}
+
+async function getCoordinatorHandle(): Promise<string> {
+  return (await readFile(path.join(await stateDir(), 'coordinator-terminal'), 'utf8')).trim()
+}
+
+async function getTerminalTitles(): Promise<Map<string, string>> {
+  const response = await runOrcaJson(['terminal', 'list'])
+  const terminals = (response.result?.terminals ?? []) as { handle?: string; title?: string }[]
+  return new Map(terminals.map((terminal) => [String(terminal.handle), String(terminal.title ?? '')]))
+}
+
+async function getTaskTitles(): Promise<Map<string, string>> {
+  const response = await runOrcaJson(['orchestration', 'task-list'])
+  const tasks = (response.result?.tasks ?? []) as { id?: string; title?: string; spec?: string }[]
+  return new Map(tasks.map((task) => [String(task.id), String(task.title ?? task.spec ?? '').split('\n')[0]]))
+}
+
+function getWorkerStatus(state: string, outcome: string, needsInput: boolean): LiveWorker['status'] {
+  if (needsInput) return 'needs input'
+  return state === 'running' || outcome === 'in_progress' ? 'working' : 'idle'
+}
+
+type OrcaWorker = Record<string, string | null>
+
+/** Every worker Orca still lists (finished ones included), with a title from its task, else its terminal. */
+async function listWorkers(): Promise<{ workers: OrcaWorker[]; titleOf: (worker: OrcaWorker) => string }> {
+  const [response, terminalTitles, taskTitles] = await Promise.all([
+    runOrcaJson(['orchestration', 'worker-list']),
+    getTerminalTitles().catch(() => new Map<string, string>()),
+    getTaskTitles().catch(() => new Map<string, string>())
+  ])
+  const workers = (response.result?.workers ?? []) as OrcaWorker[]
+  const titleOf = (worker: OrcaWorker): string => taskTitles.get(String(worker.taskId)) || terminalTitles.get(String(worker.terminal)) || String(worker.taskId ?? 'worker')
+  return { workers, titleOf }
+}
+
+function getActiveWorkers({ workers, titleOf }: Awaited<ReturnType<typeof listWorkers>>): LiveWorker[] {
+  return workers
+    .filter((worker) => !FINISHED_STATES.includes(String(worker.state)))
+    .map((worker) => {
+      const state = String(worker.state)
+      const outcome = String(worker.outcome ?? '')
+      const needsInput = /input|blocked|question|escalat/i.test(`${state} ${outcome}`)
+      return {
+        dispatchId: String(worker.dispatchId),
+        title: titleOf(worker),
+        status: getWorkerStatus(state, outcome, needsInput),
+        terminal: worker.terminal ?? null,
+        needsInput
+      }
+    })
+}
+
+// ---- work derived from the configured repos: git state and the Orca workers that ran in them ----
+
+const GIT_TIMEOUT_MS = 3000
+let configCache: { mtimeMs: number; config: CoordinatorConfig | null } | null = null
+
+/** The config, re-read only when config.yaml changes (reading it runs node). */
+async function getConfig(): Promise<CoordinatorConfig | null> {
+  const mtimeMs = await stat(configFile()).then((s) => s.mtimeMs).catch(() => -1)
+  if (mtimeMs < 0) return null
+  if (configCache?.mtimeMs !== mtimeMs) configCache = { mtimeMs, config: await readConfig() }
+  return configCache.config
+}
+
+/** Read-only git, short timeout; rejects on any failure. */
+function git(dir: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile('git', ['-C', dir, ...args], { timeout: GIT_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0' } }, (error, stdout) =>
+      error ? reject(error) : resolve(String(stdout))
+    )
+  })
+}
+
+/** Changed files and commits not pushed (vs the upstream, else vs every remote); null when it is not a readable git repo. */
+async function getLocalWork(repo: { name: string; path: string }): Promise<LocalWork | null> {
+  try {
+    const [status, branch] = await Promise.all([git(repo.path, ['status', '--porcelain']), git(repo.path, ['symbolic-ref', '--short', '-q', 'HEAD']).catch(() => 'HEAD')])
+    const unpushed = await git(repo.path, ['rev-list', '--count', '@{upstream}..HEAD'])
+      .catch(() => git(repo.path, ['rev-list', '--count', 'HEAD', '--not', '--remotes']))
+      .then((count) => Number.parseInt(count, 10) || 0)
+      .catch(() => 0)
+    const changed = status.split('\n').filter((line) => line.trim()).length
+    return changed || unpushed ? { repo: repo.name, branch: branch.trim() || 'HEAD', changed, unpushed } : null
+  } catch {
+    return null
+  }
+}
+
+/** A board task covers a derived row when it is in the same repo and on that branch (its branch field, else its id in the branch name). */
+function isCoveredByTask(board: Board, work: LocalWork): boolean {
+  const branch = work.branch.toLowerCase()
+  return (board.tasks ?? []).some((task) => task.repo === work.repo && (task.branch ? task.branch.toLowerCase() === branch : branch.includes(String(task.id).toLowerCase())))
+}
+
+/** Local git work per configured repo (Orca's workers are in Agents, not repeated in Work). config.repos holds git repositories only: readConfig drops any other entry. */
+async function getDerivedWork(board: Board): Promise<{ localWork: LocalWork[] }> {
+  const config = await getConfig().catch(() => null)
+  if (!config) return { localWork: [] }
+  const repos = (config.repos ?? []).filter((repo) => repo.name && repo.path)
+  const local = await Promise.all(repos.map((repo) => getLocalWork(repo)))
+  return { localWork: local.filter((work): work is LocalWork => work !== null && !isCoveredByTask(board, work)) }
+}
+
+/**
+ * Live = the terminal is connected, not orphaned, and an agent runs in it (as route.sh checks).
+ * A connected terminal without an agent is a bare shell: typed text would run as a command.
+ */
+async function getIsCoordinatorLive(handle: string): Promise<boolean> {
+  const response = await runOrcaJson(['terminal', 'show', '--terminal', handle])
+  const terminal = response.result?.terminal as { connected?: boolean; orphaned?: boolean; agentIdentity?: string | null } | undefined
+  return terminal?.connected === true && terminal.orphaned !== true && Boolean(terminal.agentIdentity)
+}
+
+/**
+ * A board agent and a live worker can be the same work: the coordinator recorded it under the
+ * dispatch id, or under another id with the worker's title as name. Match by id, then by name;
+ * the live row keeps the board's repo and detail, the board agent is not shown again.
+ */
+function mergeBoardAgents(workers: LiveWorker[], agents: NonNullable<Board['agents']>): { workers: LiveWorker[]; agents: NonNullable<Board['agents']> } {
+  const used = new Set<number>()
+  const pick = (match: (agent: NonNullable<Board['agents']>[number]) => boolean): NonNullable<Board['agents']>[number] | undefined => {
+    const index = agents.findIndex((agent, i) => !used.has(i) && match(agent))
+    if (index === -1) return undefined
+    used.add(index)
+    return agents[index]
+  }
+  const byId = workers.map((worker) => pick((agent) => Boolean(agent.id) && String(agent.id) === worker.dispatchId))
+  const merged = workers.map((worker, i) => {
+    const agent = byId[i] ?? pick((agent) => agent.name.trim() !== '' && agent.name.trim() === worker.title.trim())
+    return agent ? { ...worker, ...(agent.repo ? { repo: agent.repo } : {}), ...(agent.detail ? { detail: agent.detail } : {}) } : worker
+  })
+  return { workers: merged, agents: agents.filter((_, i) => !used.has(i)) }
+}
+
+async function readJson<T>(file: string, fallback: T): Promise<T> {
+  return readFile(file, 'utf8')
+    .then((text) => JSON.parse(text) as T)
+    .catch(() => fallback)
+}
+
+async function getBoard(): Promise<BoardView> {
+  const dir = await stateDir()
+  const board = await readJson<Board>(path.join(dir, 'board.json'), { version: 2 })
+  const panel = await readJson<{ ticketUrl?: string; ticketUrls?: Record<string, string>; repoColors?: Record<string, string>; oncallLabel?: string }>(path.join(dir, 'panel.json'), {})
+  const handle = await getCoordinatorHandle().catch(() => '')
+  const [list, coordinatorLive] = await Promise.all([listWorkers().catch(() => null), handle ? getIsCoordinatorLive(handle).catch(() => false) : Promise.resolve(false)])
+  const derived = await getDerivedWork(board).catch(() => ({ localWork: [] }))
+  const { workers, agents } = mergeBoardAgents(list ? getActiveWorkers(list) : [], board.agents ?? [])
+  return {
+    ...board,
+    agents,
+    workers,
+    ...derived,
+    coordinatorLive,
+    ticketUrl: panel.ticketUrl ?? '',
+    ticketUrls: panel.ticketUrls ?? {},
+    repoColors: panel.repoColors ?? {},
+    oncallLabel: panel.oncallLabel ?? 'oncall'
+  }
+}
+
+/** Runs <dir>/bin/cleanup (with -n: a dry run that changes nothing) and reads its summary line. */
+function runCleanup(dir: string, dryRun: boolean): Promise<CleanupResult> {
+  return new Promise((resolve, reject) => {
+    execFile('/bin/bash', [path.join(dir, 'bin', 'cleanup'), ...(dryRun ? ['-n'] : [])], { timeout: 300000 }, (error, stdout) => {
+      if (error) return reject(error)
+      const lines = String(stdout).trim().split('\n').filter(Boolean)
+      const summary = lines.at(-1) ?? ''
+      const counts = summary.match(/released (\d+) sessions, removed (\d+) worktrees, kept (\d+)/)
+      resolve({
+        summary,
+        actions: lines.slice(0, -1),
+        dryRun,
+        ...(counts ? { counts: { released: Number(counts[1]), removed: Number(counts[2]), kept: Number(counts[3]) } } : {})
+      })
     })
   })
 }
 
-/** One CLI call: the flat terminal list plus each worktree's visual layout. */
-async function listTerminals(): Promise<{ terminals: TerminalInfo[]; layouts: VisualLayout[] }> {
-  const parsed = JSON.parse(
-    await runOrca(['terminal', 'list', '--include-visual-layouts', '--json'])
-  ) as {
-    result?: { terminals?: TerminalInfo[]; visualLayouts?: VisualLayout[] }
-  }
-  return { terminals: parsed.result?.terminals ?? [], layouts: parsed.result?.visualLayouts ?? [] }
+/** "<option> <decision>" is a decision click only when the board has that pending decision with that option. */
+function isDecisionClick(board: Board, optionId: string, decisionId: string): boolean {
+  const decision = (board.decisions ?? []).find((d) => String(d.id) === decisionId && d.status !== 'answered')
+  return (decision?.options ?? []).some((option) => String(typeof option === 'object' && option !== null ? (option.id ?? option.label) : option) === optionId)
 }
 
-async function switchTerminal(handle: string): Promise<void> {
-  const parsed = JSON.parse(await runOrca(['terminal', 'switch', '--terminal', handle, '--json'])) as {
-    ok?: boolean
-    error?: { message?: string }
-  }
-  if (parsed.ok === false) throw new Error(parsed.error?.message ?? `could not switch to ${handle}`)
+async function queueInbox(dir: string, text: string): Promise<void> {
+  mkdirSync(dir, { recursive: true })
+  const [command, ...rest] = text.trim().split(/\s+/)
+  const board = rest.length === 1 ? await readJson<Board>(path.join(dir, 'board.json'), { version: 2 }) : null
+  const entry = /^(nudge|stop)$/.test(command)
+    ? { at: new Date().toISOString(), kind: 'command', command, target: rest.join(' ') }
+    : board && isDecisionClick(board, command, rest[0])
+      ? { at: new Date().toISOString(), kind: 'decision', decisionId: rest[0], optionId: command }
+      : { at: new Date().toISOString(), kind: 'message', text }
+  appendFileSync(path.join(dir, 'inbox.jsonl'), JSON.stringify(entry) + '\n')
 }
 
-/** Exact handle first, then a case-insensitive title substring. */
-export function pickTerminal(terminals: TerminalInfo[], preferred: string): TerminalInfo | null {
-  const wanted = preferred.trim()
-  const byHandle = terminals.find((t) => t.handle === wanted)
-  if (byHandle) return byHandle
-  const needle = (wanted || DEFAULT_COORDINATOR_TERMINAL).toLowerCase()
-  return terminals.find((t) => (t.title ?? '').toLowerCase().includes(needle)) ?? null
-}
-
-function readBoard(): void {
+/** Opens the configured coordinator agent in a terminal of the configured workspace. */
+async function startCoordinator(): Promise<{ started: boolean; output: string }> {
+  const config = await readConfig()
+  if (!config) return { started: false, output: 'The coordinator is not set up yet.' }
+  const prompt = 'Load the coordinator skill and start a coordinator session.'
+  const args = ['agent', 'launch', '--agent', config.agents.coordinator.agent, '--worktree', `path:${config.paths.workspace}`, '--prompt', prompt, '--surface', 'terminal', '--focus', '--json']
   try {
-    board = JSON.parse(fs.readFileSync(boardPath, 'utf8')) as Board
-    error = ''
-  } catch (err) {
-    board = null
-    const code = (err as NodeJS.ErrnoException).code
-    error =
-      code === 'ENOENT'
-        ? `board file not found: ${boardPath} (set the "Board file" setting, or create it with bin/board.mjs)`
-        : `cannot read board: ${(err as Error).message}`
+    await runOrca(args, 60000)
+    return { started: true, output: '' }
+  } catch (error) {
+    return { started: false, output: (error as Error).message }
   }
 }
 
-function snapshot(): BoardSnapshot {
-  return { board, error, boardPath }
-}
+// ---- links to Orca's own views (the panel does not re-show what Orca has) ----
 
-function stopWatch(): void {
-  if (debounce) clearTimeout(debounce)
-  debounce = null
-  if (poll) clearInterval(poll)
-  poll = null
-  try {
-    watcher?.close()
-  } catch {
-    // already closed
-  }
-  watcher = null
-}
-
-function scheduleRefresh(orca: OrcaWorkerApi): void {
-  if (debounce) clearTimeout(debounce)
-  debounce = setTimeout(() => {
-    debounce = null
-    readBoard()
-    orca.panels.post('board.changed', snapshot())
-  }, DEBOUNCE_MS)
-  debounce.unref()
-}
-
-async function watch(orca: OrcaWorkerApi): Promise<void> {
-  stopWatch()
-  const configured = await orca.settings.get('boardPath')
-  boardPath = expandHome(typeof configured === 'string' && configured ? configured : DEFAULT_BOARD_PATH)
-  readBoard()
-  try {
-    lastMtime = fs.statSync(boardPath).mtimeMs
-  } catch {
-    lastMtime = 0
-  }
-  // Watch the folder: writers that atomically replace the file still fire here.
-  try {
-    const dir = path.dirname(boardPath)
-    const name = path.basename(boardPath)
-    watcher = fs.watch(dir, (_event, file) => {
-      if (!file || file === name) scheduleRefresh(orca)
-    })
-  } catch {
-    // No folder to watch yet; the poll below still picks the board up.
-  }
-  // Safety net for watchers that miss a change (network shares, some editors).
-  poll = setInterval(() => {
-    let mtime: number
+async function openRepoChanges(name: string): Promise<{ opened: boolean; via: 'source-control' | 'cli' }> {
+  const repo = ((await getConfig())?.repos ?? []).find((r) => r.name === name && r.path)
+  if (!repo) throw Object.assign(new Error(`unknown repo: ${name}`), { code: 'invalid_params' })
+  const orcaRepo = (await listOrcaRepos(runOrca).catch(() => [])).find((r) => r.id && path.resolve(r.path) === path.resolve(repo.path))
+  if (orcaRepo && host) {
     try {
-      mtime = fs.statSync(boardPath).mtimeMs
+      await host.call('workspace.open', { workspaceId: `${orcaRepo.id}::${orcaRepo.path}` })
+      await host.call('commands.run', { action: 'sidebar.sourceControl.toggle' })
+      return { opened: true, via: 'source-control' }
     } catch {
-      // The board vanished: refresh once so the panel shows why.
-      if (board !== null) scheduleRefresh(orca)
-      return
+      // refused (no workspace:write) or not the desktop app: the CLI diff below
     }
-    if (mtime !== lastMtime) {
-      lastMtime = mtime
-      scheduleRefresh(orca)
-    }
-  }, POLL_MS)
-  // Never keep a process alive just for the poll or the watcher: in the real
-  // worker Orca owns the lifetime; in tests and checks Node must be able to exit.
-  poll.unref()
-  watcher?.unref()
-  if (debounce) debounce.unref()
+  }
+  await runOrca(['file', 'open-changed', '--mode', 'diff', '--worktree', `path:${repo.path}`, '--focus'], 15000)
+  return { opened: true, via: 'cli' }
 }
 
-/** Appends one entry to inbox.jsonl; the coordinator drains it with bin/board.mjs. */
-function appendInbox(entry: Record<string, unknown>): { at: string } {
-  const at = new Date().toISOString()
-  const inbox = path.join(path.dirname(boardPath), 'inbox.jsonl')
-  fs.mkdirSync(path.dirname(inbox), { recursive: true })
-  fs.appendFileSync(inbox, JSON.stringify({ at, ...entry }) + '\n')
-  return { at }
+async function openWorkspaceBoard(): Promise<{ opened: boolean; error?: string }> {
+  try {
+    if (!host) throw new Error('no host')
+    await host.call('commands.run', { action: 'workspace.openBoard' })
+    return { opened: true }
+  } catch (error) {
+    return { opened: false, error: (error as Error).message }
+  }
+}
+
+// ---- Orca's UI font for the panel ----
+
+const FONT_CHUNK = 45000 // base64 chars per part: well under the 64 KB panel message cap
+const FONT_MAX_BYTES = 200 * 1024
+const NO_FONT = { family: '', data: '', parts: 0 }
+
+/** Orca's renderer assets: $ORCA_COORDINATOR_FONT_DIR (tests), else the running app's, else the macOS app's. */
+function fontDirs(): string[] {
+  if (process.env.ORCA_COORDINATOR_FONT_DIR) return [process.env.ORCA_COORDINATOR_FONT_DIR]
+  const resources = (process as { resourcesPath?: string }).resourcesPath
+  return [
+    resources ? path.join(resources, 'app.asar.unpacked', 'out', 'renderer', 'assets') : '',
+    '/Applications/Orca.app/Contents/Resources/app.asar.unpacked/out/renderer/assets'
+  ].filter(Boolean)
+}
+
+let fontCache: { key: string; data: string } | null = null
+
+async function readGeist(): Promise<string> {
+  for (const dir of fontDirs()) {
+    const name = (await readdir(dir).catch(() => [] as string[])).find((file) => /^Geist-.*\.woff2$/.test(file))
+    if (!name) continue
+    const file = path.join(dir, name)
+    const info = await stat(file).catch(() => null)
+    if (!info) return ''
+    const key = `${file}:${info.size}:${info.mtimeMs}`
+    if (fontCache?.key === key) return fontCache.data
+    const bytes = info.size <= FONT_MAX_BYTES ? await readFile(file).catch(() => null) : null
+    // A WOFF2 file starts with "wOF2"; anything else, or a file too big for the panel, is ignored.
+    const data = bytes && bytes.subarray(0, 4).toString('latin1') === 'wOF2' ? bytes.toString('base64') : ''
+    fontCache = { key, data }
+    return data
+  }
+  return ''
+}
+
+async function getFontPart(part: number): Promise<{ family: string; data: string; parts: number }> {
+  const data = await readGeist().catch(() => '')
+  if (!data) return NO_FONT
+  const parts = Math.ceil(data.length / FONT_CHUNK)
+  const index = Number.isInteger(part) && part >= 0 && part < parts ? part : 0
+  return { family: 'Geist', data: data.slice(index * FONT_CHUNK, (index + 1) * FONT_CHUNK), parts }
 }
 
 export default function activate(orca: OrcaWorkerApi): void {
-  orca.panels.handle('board.get', async () => {
-    await ready
-    return snapshot()
-  })
+  settings = orca.settings
+  host = orca.host
+  // Orca installed a new version of the plugin: bring the coordinator package up to date with it.
+  void updateIfInstalledHere().catch(() => undefined)
 
-  orca.panels.handle('decision.respond', async ({ decisionId, optionId, note }) => {
-    await ready
-    const decision = board?.decisions?.find((d) => d.id === decisionId)
-    const optionLabel = decision?.options?.find((o) => o.id === optionId)?.label ?? optionId
-    const { at } = appendInbox({ kind: 'decision', decisionId, optionId, optionLabel, note: note ?? '' })
-    return { ok: true, at, optionLabel }
-  })
+  orca.panels.handle('setup.status', () => getSetupStatus(runOrca))
+  orca.panels.handle('setup.run', (options) => runSetup(options ?? { workspace: '' }))
+  orca.panels.handle('setup.start', () => startCoordinator())
+  orca.panels.handle('config.read', () => readSettings(runOrca))
+  orca.panels.handle('config.save', ({ patch }) => saveSettings(patch))
+  orca.panels.handle('config.removeRepo', ({ path: target }) => removeSkippedRepo(String(target ?? '')))
 
-  orca.panels.handle('command.send', async ({ command, target }) => {
-    await ready
-    const { at } = appendInbox({ kind: 'command', command, target })
-    return { ok: true, at }
-  })
+  orca.panels.handle('board.get', () => getBoard())
+  orca.panels.handle('panel.font', ({ part }) => getFontPart(Number(part)))
+  orca.panels.handle('work.openChanges', ({ repo }) => openRepoChanges(String(repo ?? '')))
+  orca.panels.handle('agents.openBoard', () => openWorkspaceBoard())
 
-  // Focus the coordinator terminal: a term_ handle is used as-is, otherwise
-  // the configured title substring is matched against Orca's terminal list.
-  orca.panels.handle('coordinator.focus', async ({ terminal }) => {
-    await ready
-    try {
-      const configured = terminal ?? (await orca.settings.get('coordinatorTerminal'))
-      const preferred =
-        typeof configured === 'string' && configured.trim() ? configured.trim() : DEFAULT_COORDINATOR_TERMINAL
-      const { terminals } = await listTerminals()
-      const target = preferred.startsWith('term_')
-        ? { handle: preferred, title: terminals.find((t) => t.handle === preferred)?.title }
-        : pickTerminal(terminals, preferred)
-      if (!target) {
-        return {
-          ok: false,
-          error: `no terminal matching "${preferred}" — set "Coordinator terminal" to its title or term_ handle`
-        }
-      }
-      await switchTerminal(target.handle)
-      return { ok: true, terminal: target.handle, title: target.title }
-    } catch (err) {
-      return { ok: false, error: (err as Error).message }
+  orca.panels.handle('board.send', async ({ text }) => {
+    if (typeof text !== 'string' || text.trim() === '') throw Object.assign(new Error('empty text'), { code: 'invalid_params' })
+    const dir = await stateDir()
+    const handle = await getCoordinatorHandle().catch(() => '')
+    const live = handle ? await getIsCoordinatorLive(handle).catch(() => false) : false
+    if (!live) {
+      await queueInbox(dir, text)
+      return { sent: false, queued: true }
     }
+    await runOrca(['terminal', 'send', '--terminal', handle, '--text', text])
+    await runOrca(['terminal', 'send', '--terminal', handle, '--text', '', '--enter'])
+    return { sent: true, queued: false }
   })
 
-  // Is the coordinator's terminal the tab the user is looking at right now?
-  // The panel hides its jump button while it is. Fails open (false = show the
-  // button) whenever anything cannot be resolved.
-  orca.panels.handle('coordinator.visible', async () => {
-    await ready
-    try {
-      const configured = await orca.settings.get('coordinatorTerminal')
-      const preferred =
-        typeof configured === 'string' && configured.trim() ? configured.trim() : DEFAULT_COORDINATOR_TERMINAL
-      const { terminals, layouts } = await listTerminals()
-      const target = pickTerminal(terminals, preferred)
-      if (!target?.tabId) return { ok: true, visible: false }
-      // readContext says which workspace is focused; the coordinator only
-      // counts as "on screen" when its workspace is the focused one.
-      let context: { terminals?: { id: string }[] } | null = null
-      try {
-        context = await orca.host.call('workspace.readContext')
-      } catch {
-        context = null
-      }
-      const focused = context?.terminals ?? []
-      const inFocusedWorkspace = focused.length === 0 || focused.some((t) => t.id === target.handle)
-      const tabActive = layouts.some((layout) => layout.root?.activeTabId === target.tabId)
-      return { ok: true, visible: inFocusedWorkspace && tabActive }
-    } catch {
-      return { ok: true, visible: false }
-    }
-  })
+  orca.panels.handle('board.cleanup', async (input) => runCleanup(await stateDir(), input?.dryRun === true))
 
-  orca.settings.onDidChange(({ key }) => {
-    if (key === 'boardPath') ready = watch(orca)
+  orca.panels.handle('board.switch', async ({ terminal }) => {
+    await runOrca(['terminal', 'switch', '--terminal', terminal || (await getCoordinatorHandle())])
+    return { switched: true }
   })
-
-  ready = watch(orca)
 }
 
 export function deactivate(): void {
-  stopWatch()
+  settings = null
+  host = null
 }

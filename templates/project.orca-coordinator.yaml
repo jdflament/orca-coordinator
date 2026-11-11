@@ -1,0 +1,7 @@
+# Optional per-project override: put this file at a project root as
+# .orca-coordinator.yaml. Keys merge over ~/.config/orca-coordinator/config.yaml
+# when the coordinator or a script runs from inside that project.
+git:
+  branchPattern: "feature/{ticket-lower}"
+github:
+  skipRepos: [docs]

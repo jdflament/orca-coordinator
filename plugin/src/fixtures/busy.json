@@ -1,63 +1,70 @@
 {
-  "version": 1,
-  "focus": "Ship the coordinator panel",
-  "updatedAt": "2026-11-10T16:00:00.000Z",
-  "seq": { "task": 6, "decision": 2, "ws": 2, "repo": 2, "instruction": 3 },
+  "version": 2,
+  "focus": "PROJ-100 checkout redesign: merge api #42, then web #310",
+  "updatedAt": "2026-01-05T09:00:00.000Z",
+  "seq": { "decision": 3, "instruction": 1 },
   "instructions": [
-    { "id": "i1", "text": "Keep the panel concise — buttons only, no filler", "to": "coordinator", "status": "active", "createdAt": "2026-11-10T15:00:00.000Z" },
-    { "id": "i2", "text": "Commit and push only after explicit validation", "to": "coordinator", "status": "active", "createdAt": "2026-11-10T15:30:00.000Z" },
-    { "id": "i3", "text": "Public, reusable, agent-agnostic repo", "to": "coordinator", "status": "done", "createdAt": "2026-11-10T14:00:00.000Z" }
-  ],
-  "workstreams": [
-    { "id": "ws1", "title": "Coordinator setup", "status": "active", "progress": 60, "owner": "coordinator", "notes": "Charter, board CLI, GitHub repo" },
-    { "id": "ws2", "title": "Coordinator panel layout", "status": "planned", "progress": null, "owner": "", "notes": "Screenshot and spacing tweaks" }
-  ],
-  "tasks": [
-    { "id": "t1", "title": "Scaffold repo + board CLI", "status": "done", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "" },
-    { "id": "t2", "title": "Build Orca worker-panel plugin", "status": "active", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "board.get + decision.respond + live refresh" },
-    { "id": "t3", "title": "Validate, test, screenshot plugin", "status": "blocked", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "waiting on worker tests" },
-    { "id": "t4", "title": "Board CLI: repos/PRs section", "status": "done", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "" },
-    { "id": "t5", "title": "Coordinator skill (agent-agnostic)", "status": "done", "kind": "self", "assignee": "coordinator", "ws": "ws1", "detail": "" },
-    { "id": "t6", "title": "Write quickstart for the panel", "status": "queued", "kind": "self", "assignee": "", "ws": "ws2", "detail": "" }
-  ],
-  "repos": [
-    { "id": "r1", "name": "jdflament/orca-coordinator", "kind": "repo", "status": "building", "detail": "Coordinator brain + Orca panel", "url": "https://github.com/jdflament/orca-coordinator" },
-    { "id": "r2", "name": "#12 Coordinator panel layout", "kind": "pr", "status": "review", "detail": "Screenshot and spacing tweaks", "url": "" }
+    { "id": "i1", "text": "One question per message, with a recommendation", "status": "active" }
   ],
   "decisions": [
     {
-      "id": "d1",
-      "title": "Enable the Coordinator panel in Orca?",
-      "context": "Trusted-worker plugin: reads the board file, writes decision clicks to the inbox, reads agent status.",
+      "id": 1,
+      "title": "PROJ-101",
+      "repo": "api",
+      "url": "https://github.com/acme/api/pull/42",
+      "action": "Merge",
+      "context": "#42 green and approved. Deploy order: api, then web.",
       "options": [
-        { "id": "o1", "label": "Yes, enable it", "recommended": true },
-        { "id": "o2", "label": "Not yet" }
+        { "id": "done", "label": "Merge", "recommended": true },
+        { "id": "skip", "label": "Skip" },
+        { "id": "explain", "label": "Explain" }
       ],
-      "status": "pending",
-      "answer": "",
-      "createdAt": "2026-11-10T15:59:00.000Z"
+      "status": "pending"
     },
     {
-      "id": "d2",
-      "title": "Public or private repo?",
-      "context": "Logic is reusable; board data stays local.",
+      "id": 2,
+      "title": "PROJ-120",
+      "repo": "api",
+      "url": "https://example.test/tickets/PROJ-120",
+      "action": "Run SQL",
+      "context": "After support confirms: run reports/proj-120-fix.sql (dry run first).",
       "options": [
-        { "id": "o1", "label": "Public", "recommended": true },
-        { "id": "o2", "label": "Private" }
+        { "id": "done", "label": "Run SQL" },
+        { "id": "explain", "label": "Explain" }
       ],
+      "status": "pending",
+      "oncall": true
+    },
+    {
+      "id": 3,
+      "title": "PROJ-110",
+      "repo": "web",
+      "url": "https://github.com/acme/web/pull/300",
+      "action": "Get review",
+      "context": "#300: ask a teammate to re-approve (threads fixed)",
+      "options": [ { "id": "done", "label": "Ask review" } ],
       "status": "answered",
-      "answer": "Public",
-      "answeredAt": "2026-11-10T15:59:30.000Z",
-      "createdAt": "2026-11-10T15:58:00.000Z"
+      "answer": "Ask review"
     }
   ],
+  "workstreams": [
+    { "id": "PROJ-100", "title": "Checkout redesign", "url": "https://example.test/tickets/PROJ-100", "status": "active", "progress": null, "notes": "web #310 waits for api #42" },
+    { "id": "PROJ-120", "title": "Order cancellation data fix", "url": "https://example.test/tickets/PROJ-120", "status": "ready", "progress": null, "notes": "", "oncall": true }
+  ],
+  "tasks": [
+    { "id": "PROJ-101", "ws": "PROJ-100", "repo": "api", "status": "pr", "pr": 42, "url": "https://github.com/acme/api/pull/42", "detail": "review/merge" },
+    { "id": "PROJ-102", "ws": "PROJ-100", "repo": "web", "status": "blocked", "pr": 310, "url": "https://github.com/acme/web/pull/310", "detail": "waits PROJ-101" },
+    { "id": "PROJ-103", "ws": "PROJ-100", "repo": "proto", "status": "merged", "pr": 77, "url": "https://github.com/acme/proto/pull/77", "detail": "merged" },
+    { "id": "PROJ-121", "ws": "PROJ-120", "repo": "api", "status": "local", "url": "https://example.test/tickets/PROJ-121", "detail": "not started", "oncall": true }
+  ],
+  "repos": [
+    { "id": "PROJ-090", "name": "#298", "kind": "pr", "repo": "web", "status": "hold", "detail": "flag only on one tenant in prod", "url": "https://github.com/acme/web/pull/298" }
+  ],
   "agents": [
-    { "id": "coordinator", "name": "coordinator", "role": "brain", "state": "working", "detail": "Setting up orchestration + panel", "updatedAt": "2026-11-10T16:00:00.000Z" },
-    { "id": "explore-plugin-docs", "name": "explore: plugin docs", "role": "worker", "state": "idle", "detail": "Reading Orca plugin docs", "updatedAt": "2026-11-10T16:00:00.000Z" }
+    { "id": "ctx_a1", "name": "pr-review: api#42", "repo": "api", "role": "worker", "state": "working", "detail": "reviewing" }
   ],
   "log": [
-    { "at": "2026-11-10T15:58:00.000Z", "text": "decision raised: Public or private repo?" },
-    { "at": "2026-11-10T15:59:30.000Z", "text": "decision d2 answered: Public" },
-    { "at": "2026-11-10T16:00:00.000Z", "text": "task t3 → blocked" }
+    { "at": "2026-01-05T08:40:00.000Z", "text": "api #42: 3 threads fixed and resolved" },
+    { "at": "2026-01-05T08:55:00.000Z", "text": "decision 1 raised: PROJ-101 (Merge)" }
   ]
 }

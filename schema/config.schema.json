@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "config.schema.json",
+  "title": "orca-coordinator config: repos and adapters",
+  "description": "The parts of config.yaml that carry ticketing and chat. Top-level adapters are the default; a repos[] entry may carry its own ticketing / chat block; a repository's own .orca-coordinator.yaml (at its root) wins over both. Other keys are checked in bin/lib/config.mjs.",
+  "type": "object",
+  "$defs": {
+    "ticketing": {
+      "type": "object",
+      "description": "A ticketing tool (adapters/ticketing/<kind>.sh).",
+      "properties": {
+        "kind": { "enum": ["linear", "jira", "github", "none"] },
+        "via": { "type": "string" },
+        "team": { "type": "string" },
+        "todoStates": { "type": "array", "items": { "type": "string" } },
+        "childLabel": { "type": "string" },
+        "issueUrl": { "type": "string", "description": "UI link template with {id}; required when kind is not none." }
+      }
+    },
+    "chat": {
+      "type": "object",
+      "description": "A chat tool (adapters/chat/<kind>.sh).",
+      "properties": {
+        "kind": { "enum": ["slack", "none"] },
+        "via": { "type": "string" },
+        "secretRef": { "type": "string" },
+        "mentionIds": { "type": "array", "items": { "type": "string" } },
+        "reviewChannels": { "type": "array", "items": { "type": "string" } },
+        "draftOnlyChannels": { "type": "array", "items": { "type": "string" } }
+      }
+    }
+  },
+  "properties": {
+    "adapters": {
+      "type": "object",
+      "properties": {
+        "ticketing": { "$ref": "#/$defs/ticketing" },
+        "chat": { "$ref": "#/$defs/chat" }
+      }
+    },
+    "repos": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "path"],
+        "properties": {
+          "name": { "type": "string" },
+          "path": { "type": "string", "description": "The top level of a git work tree." },
+          "base": { "type": "string" },
+          "ticketing": { "$ref": "#/$defs/ticketing" },
+          "chat": { "$ref": "#/$defs/chat" }
+        }
+      }
+    }
+  }
+}

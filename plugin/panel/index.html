@@ -1,0 +1,953 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      /* Matches Orca's own right-sidebar panels (values from Orca.app's renderer, see the report).
+         Orca injects --orca-* (its curated token subset) and sets html.light|dark; fallbacks = Orca dark. */
+      :root {
+        --bg: var(--orca-background, #0a0a0a); --fg: var(--orca-foreground, #f0f0f0);
+        --muted: var(--orca-muted-foreground, #acacac); --muted-bg: var(--orca-muted, #262626);
+        --line: var(--orca-border, #ffffff12); --input: var(--orca-input, #ffffff26);
+        --accent: var(--orca-accent, #404040); --accent-fg: var(--orca-accent-foreground, var(--fg));
+        --primary: var(--orca-primary, #e5e5e5); --primary-fg: var(--orca-primary-foreground, #171717);
+        --danger: var(--orca-destructive, #ff6568); --ring: var(--orca-ring, #737373);
+        --radius: var(--orca-radius, 0.625rem); --radius-md: calc(var(--radius) - 2px); --radius-sm: calc(var(--radius) - 4px);
+        /* The sidebar surface the panel sits on (--sidebar is not injected): = --card in dark, background/muted 50/50 in light. */
+        --surface: var(--orca-card, #171717);
+        --hover: color-mix(in srgb, var(--accent) 50%, transparent);
+        --focus: 0 0 0 3px color-mix(in srgb, var(--ring) 50%, transparent);
+        --font: var(--app-font-family, "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif);
+        /* Orca exposes no success/warning/info tokens: status hues are mixed toward the theme foreground. */
+        --blue: color-mix(in srgb, #3b82f6 70%, var(--fg)); --green: color-mix(in srgb, #22c55e 65%, var(--fg)); --amber: color-mix(in srgb, #f59e0b 70%, var(--fg));
+      }
+      html.light { --surface: color-mix(in srgb, var(--bg) 50%, var(--muted-bg)); --hover: var(--accent); --blue: color-mix(in srgb, #2563eb 85%, var(--fg)); --green: color-mix(in srgb, #16a34a 85%, var(--fg)); --amber: color-mix(in srgb, #b45309 90%, var(--fg)); }
+      [hidden] { display: none !important; }
+      html, body { height: 100%; }
+      body { margin: 0; font: 12px/16px var(--font); color: var(--fg); background: var(--surface); -webkit-font-smoothing: antialiased; }
+      main { height: 100%; box-sizing: border-box; overflow-y: auto; overflow-x: hidden; min-width: 0; padding-bottom: 8px; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--muted) 34%, transparent) transparent; }
+      main::-webkit-scrollbar { width: 12px; }
+      main::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--muted) 28%, transparent); }
+      main::-webkit-scrollbar-track { background: transparent; }
+      svg { width: 14px; height: 14px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+      ::selection { background: color-mix(in srgb, var(--ring) 35%, transparent); }
+
+      /* Panel header: px-3 py-2 border-b, title 11px semibold uppercase tracking-wider muted. */
+      header { position: relative; display: flex; align-items: center; gap: 4px; padding: 6px 8px 6px 12px; min-height: 24px; border-bottom: 1px solid var(--line); }
+      /* Overflow menu = Orca's DropdownMenuContent/Item (store-*.js): rounded-[11px] border black/10 (dark black/60)
+         bg-popover/78 (dark /75) blur p-[4px] min-w-[11rem], sideOffset 4; items rounded-md px-2.5 py-1 13px/16px, focus bg black/8 (dark white/14). */
+      .menu { position: absolute; z-index: 70; top: calc(100% - 2px); right: 8px; min-width: 11rem; padding: 4px; box-sizing: border-box; border-radius: 11px; border: 1px solid rgb(0 0 0 / 0.1); background: color-mix(in srgb, var(--orca-popover, var(--surface)) 78%, transparent); color: var(--orca-popover-foreground, var(--fg)); box-shadow: 0 6px 16px rgb(0 0 0 / 0.14), inset 0 1px 0 rgb(255 255 255 / 0.14); backdrop-filter: blur(24px) saturate(1.5); }
+      html:not(.light) .menu { border-color: rgb(0 0 0 / 0.6); background: color-mix(in srgb, var(--orca-popover, var(--surface)) 75%, transparent); box-shadow: 0 16px 34px rgb(0 0 0 / 0.4), inset 0 0 0 1px rgb(255 255 255 / 0.12); }
+      .menu > button { display: flex; width: 100%; height: auto; justify-content: flex-start; gap: 8px; padding: 4px 10px; border: 0; border-radius: var(--radius-md); font-size: 13px; line-height: 16px; font-weight: 400; color: inherit; background: transparent; cursor: default; transition: none; }
+      .menu > button:hover, .menu > button:focus-visible { background: rgb(0 0 0 / 0.08); color: inherit; box-shadow: none; }
+      html:not(.light) .menu > button:hover, html:not(.light) .menu > button:focus-visible { background: rgb(255 255 255 / 0.14); }
+      /* Clean-up preview: what the dry run found, then Confirm / Cancel. */
+      .plan { display: flex; flex-direction: column; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+      .plan:empty { display: none; }
+      .plan .what { color: var(--fg); }
+      .plan .kept { color: var(--muted); font-size: 11px; }
+      header strong { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+      header .meta { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+      .spinner { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; border: 1.5px solid color-mix(in srgb, var(--muted) 30%, transparent); border-top-color: var(--fg); border-radius: 50%; animation: spin 0.8s linear infinite; box-sizing: border-box; }
+      @keyframes spin { to { transform: rotate(360deg); } }
+
+      /* Inline notices: border-b px-3 py-1.5 text-xs muted (PluginPanel). */
+      .result { position: relative; display: flex; gap: 6px; align-items: baseline; padding: 6px 32px 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+      .result:empty { display: none; }
+      .result.error { color: var(--danger); }
+      .result details { flex: 1; min-width: 0; }
+      .result summary { padding: 0; color: inherit; }
+      .result .actions-list { margin-top: 2px; font-size: 11px; }
+      .result > button { position: absolute; right: 6px; top: 4px; }
+
+      .focus { color: var(--muted); padding: 8px 12px 0; }
+      .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+      .stat { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .stat b { font-weight: 600; margin-right: 4px; }
+      .stat span { color: var(--muted); font-size: 11px; }
+
+      /* Section headers: px-3 pt-2, 10px semibold uppercase tracking-wider muted. */
+      h2 { font-size: 10px; line-height: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0; padding: 12px 12px 4px; display: flex; gap: 6px; }
+      h2.link { cursor: pointer; }
+      h2.link:hover { color: var(--fg); }
+      h2 .count { font-weight: 400; text-transform: none; letter-spacing: 0; color: color-mix(in srgb, var(--muted) 60%, transparent); }
+      section:empty { display: none; }
+      a { color: inherit; cursor: pointer; text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; opacity: 0.6; }
+      .dot.live { background: var(--green); opacity: 1; }
+
+      /* List rows: one line, text-xs, py-1 px-1 rounded, hover bg-accent/50; everything truncates. */
+      .row, .wk, .wrow { display: flex; align-items: center; gap: 8px; min-height: 24px; margin: 0 8px; padding: 0 4px; border-radius: var(--radius-sm); min-width: 0; white-space: nowrap; }
+      .row > *, .wk > *, .wrow > * { min-width: 0; }
+      .row:hover, .wk:hover, .wrow:hover { background: var(--hover); color: var(--accent-fg); }
+      .wrow { cursor: pointer; }
+      .grow { flex: 1 1 auto; }
+      .trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .meta-text { color: color-mix(in srgb, var(--muted) 70%, transparent); font-size: 11px; }
+      .act { visibility: hidden; }
+      .row:hover .act, .wk:hover .act, .act.keep { visibility: visible; }
+      .repo { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; flex: none; max-width: 35%; overflow: hidden; }
+      .fixed { flex: none; overflow: visible; }
+      .repo i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+      .state { font-size: 11px; white-space: nowrap; flex: none; margin-left: auto; }
+      .pr { color: var(--muted); font-size: 11px; flex: none; }
+      /* Badge (outline, 10px): the oncall marker. */
+      .oncall { flex: none; font-size: 10px; font-weight: 500; line-height: 14px; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); }
+
+      /* Decision cards (Needs you): the one multi-line item. */
+      .item { margin: 0 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+      .item:last-child { border-bottom: 0; }
+      .item .top { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
+      .item .verb { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
+      .item .what { color: var(--muted); margin: 2px 0 6px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+      .feature { display: flex; align-items: center; gap: 8px; min-height: 24px; margin: 4px 8px 0; padding: 0 4px; white-space: nowrap; min-width: 0; }
+      .feature a { font-weight: 500; }
+      .bar { margin-left: auto; width: 48px; height: 3px; border-radius: 999px; overflow: hidden; background: var(--muted-bg); flex: none; }
+      .bar i { display: block; height: 100%; border-radius: inherit; background: var(--green); }
+      .note { color: var(--amber); font-size: 11px; }
+      .muted { color: var(--muted); }
+      /* Empty state: py-1 text-xs muted. */
+      .ok { color: var(--muted); padding: 4px 12px; }
+      .actions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+      details > summary { cursor: pointer; color: var(--muted); font-size: 11px; margin: 0 8px; padding: 4px; list-style: none; border-radius: var(--radius-sm); outline: none; white-space: nowrap; }
+      summary::-webkit-details-marker { display: none; }
+      summary:hover { color: var(--fg); }
+      summary:focus-visible { box-shadow: var(--focus); }
+      summary::before { content: ''; display: inline-block; width: 4px; height: 4px; margin: 0 6px 1px 1px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform 0.15s; }
+      details[open] > summary::before { transform: rotate(45deg); }
+
+      /* Buttons: size xs (h-6 px-2 text-xs rounded-md font-medium); default = primary, outline, ghost; icon = p-1 rounded muted. */
+      button { display: inline-flex; align-items: center; justify-content: center; gap: 4px; font: inherit; font-size: 12px; font-weight: 500; height: 24px; padding: 0 8px; border-radius: var(--radius-md); border: 1px solid var(--line); background: transparent; color: var(--fg); cursor: pointer; outline: none; white-space: nowrap; flex: none; transition: background-color 0.15s, color 0.15s, box-shadow 0.15s; }
+      button:hover { background: var(--hover); color: var(--accent-fg); }
+      button:focus-visible { box-shadow: var(--focus); border-color: var(--ring); }
+      button.primary { background: var(--primary); border-color: transparent; color: var(--primary-fg); }
+      button.primary:hover { background: color-mix(in srgb, var(--primary) 90%, transparent); color: var(--primary-fg); }
+      button.ghost { border-color: transparent; color: var(--muted); }
+      button.ghost:hover { color: var(--fg); }
+      button.icon { width: 22px; height: 22px; padding: 0; border-color: transparent; border-radius: var(--radius-sm); color: var(--muted); }
+      button.icon:hover { background: var(--accent); color: var(--fg); }
+      button:disabled { opacity: 0.5; cursor: not-allowed; pointer-events: none; }
+
+      /* Forms (setup, settings): inputs h-7 text-xs border-input rounded-md, dark bg-input/30. */
+      .setup p { color: var(--muted); margin: 0; padding: 4px 12px 8px; }
+      .setup p.note { color: var(--amber); }
+      .form { display: flex; flex-direction: column; gap: 8px; padding: 0 12px; }
+      .form > button.primary { align-self: flex-start; }
+      .field { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; align-items: center; min-width: 0; }
+      .field > span { color: var(--muted); font-size: 11px; }
+      .field.top { align-items: start; }
+      .field.top > span { padding-top: 4px; }
+      .checks { display: flex; flex-direction: column; min-width: 0; }
+      .repo-row { display: flex; flex-direction: column; min-width: 0; }
+      .repo-row > .check { flex: 1; }
+      .repo-row details > summary { margin: 0 0 0 22px; padding: 2px 4px; }
+      .repo-tools { display: flex; flex-direction: column; gap: 8px; padding: 6px 0 8px 22px; }
+      .check { display: flex; align-items: center; gap: 8px; min-height: 24px; min-width: 0; padding: 0 4px; margin: 0 -4px; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; }
+      .check:hover { background: var(--hover); }
+      .check .trunc { flex: 0 1 auto; }
+      .check .muted { font-size: 11px; color: color-mix(in srgb, var(--muted) 70%, transparent); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
+      input[type=text], input[type=number], select { font: inherit; font-size: 12px; height: 28px; box-sizing: border-box; min-width: 0; width: 100%; padding: 0 8px; border-radius: var(--radius-md); border: 1px solid var(--input); background: transparent; color: var(--fg); outline: none; transition: box-shadow 0.15s, border-color 0.15s; }
+      html:not(.light) input[type=text], html:not(.light) input[type=number], html:not(.light) select { background: color-mix(in srgb, var(--input) 30%, transparent); }
+      select { padding: 0 4px; }
+      select option { background: var(--surface); color: var(--fg); }
+      input[type=number] { width: 80px; }
+      input:focus-visible, select:focus-visible { box-shadow: var(--focus); border-color: var(--ring); }
+      input[type=checkbox] { width: 14px; height: 14px; margin: 0; accent-color: var(--primary); flex: none; }
+      input:disabled, select:disabled { opacity: 0.5; }
+      .change { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; white-space: nowrap; min-width: 0; }
+      .change select { width: auto; max-width: 100%; height: 24px; font-size: 11px; border-color: transparent; background: transparent; color: var(--muted); }
+      .change select:hover { border-color: var(--input); }
+      /* Error box: mx-3 mt-2 rounded-md border-destructive/30 bg-destructive/10 px-3 py-2 text-xs destructive (PluginPanel). */
+      .errors { margin: 8px 12px 0; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); font-size: 12px; }
+      .errors:empty { display: none; }
+      .errors div { overflow-wrap: anywhere; }
+      .form-actions { display: flex; gap: 4px; align-items: center; padding: 12px 12px 4px; }
+      .form-actions .muted { margin-left: auto; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+      .helper { color: var(--muted); font-size: 11px; }
+      .settings .path { color: color-mix(in srgb, var(--muted) 70%, transparent); font-size: 11px; padding: 0 12px 4px; overflow-wrap: anywhere; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><span id="dot" class="dot"></span><strong>Coordinator</strong><span id="updated" class="meta">loading</span><button id="start" class="primary" hidden>Start coordinator</button><button id="more" class="icon" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"></button><div id="more-menu" class="menu" role="menu" hidden><button id="cleanup" role="menuitem" title="Shows what it would close and remove first; nothing changes until you confirm">Clean up finished workers…</button></div><button id="open" class="icon" title="Open coordinator"></button><button id="gear" class="icon" title="Settings" hidden></button></header>
+      <div id="plan" class="plan" hidden></div>
+      <div id="result" class="result"></div>
+      <section id="setup" class="setup" hidden></section>
+      <section id="settings" class="settings" hidden></section>
+      <div id="board">
+        <div id="focus" class="focus trunc"></div>
+        <div id="stats" class="stats"></div>
+        <section id="instructions"></section>
+        <section id="needs"></section>
+        <section id="work"></section>
+        <section id="agents"></section>
+      </div>
+    </main>
+    <script>
+      const PALETTE = ['#8957e5', '#bf8700', '#0e8a8a', '#2f6fbf', '#1f883d', '#c2410c', '#b03a8f', '#5a6b2f']
+      let repoColors = {}
+      let ticketUrl = ''
+      let ticketUrls = {}
+      let oncallLabel = 'oncall'
+      const repoColor = (repo) => repoColors[repo] || PALETTE[[...text(repo)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 9973, 7) % PALETTE.length]
+      const STATE_COLORS = { pr: 'blue', review: 'blue', working: 'blue', running: 'blue', active: 'blue', hold: 'amber', waiting: 'amber', merged: 'green', done: 'green', succeeded: 'green', failed: 'danger', local: 'amber', blocked: 'danger', 'needs-input': 'danger', 'needs input': 'danger', idle: 'muted' }
+      const ICONS = {
+        // Lucide, as Orca renders them (copied from Orca.app's renderer bundle): ellipsis, terminal, square, refresh-cw, settings.
+        more: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>',
+        terminal: '<svg viewBox="0 0 24 24"><path d="M12 19h8"/><path d="m4 17 6-6-6-6"/></svg>',
+        stop: '<svg viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/></svg>',
+        retry: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>',
+        gear: '<svg viewBox="0 0 24 24"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>'
+      }
+      const DONE_STATES = ['merged', 'done']
+      // Languages the coordinator writes drafts in: stored as the code, shown by their own name.
+      const LANGUAGES = [['en', 'English'], ['fr', 'Français'], ['de', 'Deutsch'], ['es', 'Español'], ['it', 'Italiano'], ['pt', 'Português'], ['nl', 'Nederlands'], ['pl', 'Polski'], ['sv', 'Svenska'], ['tr', 'Türkçe'], ['uk', 'Українська'], ['ru', 'Русский'], ['ja', '日本語'], ['ko', '한국어'], ['zh', '中文']]
+      const DONE_SHOWN = 15
+      const SENT_LOCK_MS = 5000
+      const decisionLockedUntil = new Map()
+      let configured = null
+      let settingsOpen = false
+      let setupShown = false
+      const byId = (id) => document.getElementById(id)
+      const list = (value) => (Array.isArray(value) ? value : [])
+      const text = (value) => (value === undefined || value === null ? '' : String(value))
+
+      function el(tag, className, value) {
+        const node = document.createElement(tag)
+        if (className) node.className = className
+        if (text(value) !== '') { node.textContent = text(value); node.title = text(value) }
+        return node
+      }
+
+      function link(label, url, className) {
+        const node = el('a', className, label)
+        if (typeof url === 'string' && url) node.onclick = () => orca.shell?.openExternal(url)
+        return node
+      }
+
+      function repoLabel(repo) {
+        const node = el('span', 'repo')
+        const dot = el('i')
+        dot.style.background = repo ? repoColor(repo) : 'var(--muted)'
+        node.append(dot, el('span', 'trunc', repo || 'worker'))
+        return node
+      }
+
+      function state(value) {
+        const node = el('span', 'state', value || 'unknown')
+        node.style.color = 'var(--' + (STATE_COLORS[value] || 'muted') + ')'
+        return node
+      }
+
+      function oncallBadge(entry) {
+        return entry.oncall === true ? [el('span', 'oncall', oncallLabel)] : []
+      }
+
+      function button(label, onClick, className) {
+        const node = el('button', className, label)
+        node.onclick = onClick
+        return node
+      }
+
+      function iconButton(icon, title, onClick, className) {
+        const node = button('', onClick, 'icon act ' + (className || ''))
+        node.innerHTML = ICONS[icon]
+        node.title = title
+        return node
+      }
+
+      // One list row, one line: cells in order; a 'grow' cell takes the free width and truncates.
+      function row(cells, className) {
+        const node = el('div', className ? 'row ' + className : 'row')
+        node.append(...cells)
+        return node
+      }
+
+      // A section with no rows is hidden, unless it is a main one: then it shows the empty line.
+      function section(title, nodes, badge, empty) {
+        if (nodes.length === 0 && !empty) return []
+        if (nodes.length === 0) nodes = [el('div', 'ok', empty)]
+        const heading = el('h2', '', title)
+        if (badge) heading.append(el('span', 'count', badge))
+        return [heading, ...nodes]
+      }
+
+      // Recent: relative; past 24 h: a short date ("Nov 11", with the year when it is not this year).
+      // A section heading that opens Orca's own view of the same things.
+      function linkHeading(nodes, title, onClick) {
+        if (nodes[0]) { nodes[0].classList.add('link'); nodes[0].title = title; nodes[0].onclick = onClick }
+        return nodes
+      }
+
+      async function openBoard() {
+        const result = await orca.plugin.request('agents.openBoard').catch((error) => ({ opened: false, error: error.message }))
+        if (!result?.opened) showResult('Could not open the Workspace Board: ' + text(result?.error), [], true)
+      }
+
+      function getAgo(iso) {
+        const date = new Date(iso)
+        if (Number.isNaN(date.getTime())) return 'unknown'
+        const minutes = Math.round((Date.now() - date.getTime()) / 60000)
+        if (minutes < 1) return 'just now'
+        if (minutes < 60) return minutes + 'm ago'
+        if (minutes < 24 * 60) return Math.round(minutes / 60) + 'h ago'
+        const sameYear = date.getFullYear() === new Date().getFullYear()
+        return date.toLocaleDateString(undefined, sameYear ? { month: 'short', day: 'numeric' } : { month: 'short', day: 'numeric', year: 'numeric' })
+      }
+
+      async function sendText(message) {
+        byId('updated').textContent = 'sending'
+        try {
+          const result = await orca.plugin.request('board.send', { text: message })
+          byId('updated').textContent = result && result.queued ? 'queued (coordinator offline)' : 'sent'
+          return true
+        } catch (error) {
+          byId('updated').textContent = 'failed: ' + error.message
+          return false
+        }
+      }
+
+      function renderStats(board, workers) {
+        const tasks = list(board.tasks)
+        const counts = [
+          ['needs you', list(board.decisions).filter((d) => d.status !== 'answered').length + workers.filter((w) => w.needsInput).length],
+          ['open', getWorkItems(board).filter((item) => !DONE_STATES.includes(item.status)).length],
+          ['blocked', tasks.filter((t) => t.status === 'blocked').length]
+        ]
+        return counts.map(([label, count]) => {
+          const node = el('div', 'stat')
+          const number = el('b', '', String(count))
+          if (label === 'blocked' && count > 0) number.style.color = 'var(--danger)'
+          node.append(number, el('span', '', label))
+          return node
+        })
+      }
+
+      function renderInstructions(instructions) {
+        return list(instructions).filter((i) => i.status !== 'done').map((i) => el('div', 'item trunc', i.text))
+      }
+
+      function renderDecision(decision) {
+        const answered = decision.status === 'answered'
+        const card = el('div', 'item')
+        const top = el('div', 'top')
+        top.append(repoLabel(decision.repo), link(decision.title || decision.id, decision.url, 'trunc grow'), ...oncallBadge(decision), el('span', 'verb', decision.action))
+        const actions = el('div', 'actions')
+        const sent = (decisionLockedUntil.get(decision.id) ?? 0) > Date.now()
+        const sentNote = el('span', 'muted', 'sent')
+        sentNote.hidden = !sent
+        const setLocked = (locked) => {
+          actions.querySelectorAll('button').forEach((node) => { node.disabled = locked })
+          sentNote.hidden = !locked
+        }
+        const sendOption = (optionId) => {
+          decisionLockedUntil.set(decision.id, Date.now() + SENT_LOCK_MS)
+          setLocked(true)
+          setTimeout(() => { decisionLockedUntil.delete(decision.id); setLocked(false) }, SENT_LOCK_MS)
+          void sendText(optionId + ' ' + decision.id)
+        }
+        if (answered) actions.append(el('span', 'muted', 'answered: ' + text(decision.answer)))
+        else actions.append(...list(decision.options).map((option) => {
+          const optionId = text(typeof option === 'object' && option !== null ? option.id ?? option.label : option)
+          const label = text(typeof option === 'object' && option !== null ? option.label ?? option.id : option)
+          const node = button(label, () => sendOption(optionId), option?.recommended ? 'primary' : '')
+          node.disabled = sent
+          return node
+        }), sentNote)
+        card.append(top, el('div', 'what', decision.context), actions)
+        return card
+      }
+
+      function renderWorkerRow(worker) {
+        const node = el('div', 'wrow')
+        const title = el('span', 'trunc', worker.title)
+        title.style.flex = '0 1 auto'
+        node.append(...(worker.repo ? [repoLabel(worker.repo)] : []), title, el('span', 'meta-text trunc grow', worker.detail), state(worker.status))
+        if (worker.terminal) node.onclick = () => orca.plugin.request('board.switch', { terminal: worker.terminal })
+        return node
+      }
+
+      function renderNeeds(decisions, workers) {
+        const pending = [...list(decisions).filter((d) => d.status !== 'answered').map(renderDecision), ...workers.filter((w) => w.needsInput).map(renderWorkerRow)]
+        return pending.length === 0 ? [el('div', 'ok', 'Nothing waiting')] : pending
+      }
+
+      function getWorkItems(board) {
+        const prs = list(board.repos).map((repo) => ({ ...repo, pr: repo.pr ?? text(repo.name).replace('#', '') }))
+        return [...list(board.tasks), ...prs]
+      }
+
+      function renderWorkRow(item) {
+        const nudge = item.status === 'blocked' ? iconButton('retry', 'Nudge ' + item.id, () => sendText('nudge ' + item.id)) : null
+        const pr = item.pr ? [link('#' + item.pr, item.url, 'pr')] : []
+        const url = Object.hasOwn(ticketUrls, text(item.repo)) ? text(ticketUrls[item.repo]) : ticketUrl
+        const id = link(item.id, url ? url.replace('{id}', item.id) : item.pr ? '' : item.url, 'trunc')
+        id.style.flex = '0 1 auto'
+        const node = el('div', 'wk')
+        node.append(repoLabel(item.repo), id, ...pr, ...oncallBadge(item), el('span', 'meta-text trunc grow', item.detail), item.status === 'pr' ? el('span') : state(item.status), ...(nudge ? [nudge] : []))
+        return node
+      }
+
+      function renderWorkGroup(header, items) {
+        const open = items.filter((item) => !DONE_STATES.includes(item.status))
+        const done = items.filter((item) => DONE_STATES.includes(item.status))
+        if (done.length === 0) return [header, ...open.map(renderWorkRow)]
+        const fold = el('details')
+        fold.append(el('summary', '', 'Done (' + done.length + ')'), ...done.slice(-DONE_SHOWN).reverse().map(renderWorkRow))
+        return [header, ...open.map(renderWorkRow), fold]
+      }
+
+      function renderFeatureHeader(ws, items) {
+        const progress = typeof ws.progress === 'number' ? ws.progress
+          : items.length ? Math.round((100 * items.filter((item) => DONE_STATES.includes(item.status)).length) / items.length) : 0
+        const node = el('div', 'feature')
+        const bar = el('div', 'bar')
+        bar.title = progress + '%'
+        bar.append(el('i'))
+        bar.firstChild.style.width = progress + '%'
+        const title = link(ws.title, ws.url, 'trunc')
+        title.style.flex = '0 1 auto'
+        node.append(title, ...oncallBadge(ws), el('span', 'note trunc grow', ws.notes), bar)
+        return node
+      }
+
+      function renderWork(board) {
+        const items = getWorkItems(board)
+        const tracked = list(board.workstreams).flatMap((ws) => {
+          const own = items.filter((item) => item.ws === ws.id)
+          return renderWorkGroup(renderFeatureHeader(ws, own), own)
+        })
+        return [...tracked, ...renderRepoWork(board)]
+      }
+
+      // Local git work the board does not track (derived by the worker): one row per repo; a click
+      // shows that repo's changes in Orca's own Source Control. Workers are in Agents, not here.
+      function renderRepoWork(board) {
+        return list(board.localWork).map((work) => {
+          const counts = [work.changed ? work.changed + ' changed' : '', work.unpushed ? work.unpushed + ' unpushed' : ''].filter(Boolean).join(' · ')
+          const node = row([repoLabel(work.repo), el('span', 'trunc grow', work.branch), el('span', 'meta-text fixed', counts)], 'wrow')
+          node.classList.remove('row')
+          node.title = 'Open ' + work.repo + ' changes in Source Control'
+          node.onclick = () => orca.plugin.request('work.openChanges', { repo: work.repo }).catch((error) => showResult('Could not open ' + work.repo + ': ' + error.message, [], true))
+          return node
+        })
+      }
+
+      function renderAgents(agents, workers) {
+        const fromBoard = list(agents).map((agent) => {
+          const name = el('span', 'trunc', agent.name)
+          name.style.flex = '0 1 auto'
+          return row([
+            repoLabel(agent.repo), name, el('span', 'meta-text trunc grow', [agent.role === 'worker' ? '' : agent.role, agent.detail].filter(Boolean).join(' · ')), state(agent.state),
+            ...(agent.state === 'working' ? [iconButton('stop', 'Stop ' + agent.name, () => sendText('stop ' + agent.name))] : [])
+          ])
+        })
+        return [...fromBoard, ...workers.map(renderWorkerRow)]
+      }
+
+      // A board agent set with --id <dispatchId> is the same Orca worker as a live worker-list row: show it once.
+      // board.get already merged each board agent into its live worker (same id, else name = title).
+      function getBoardAgents(board) {
+        return list(board.agents)
+      }
+
+      function render(board) {
+        repoColors = board.repoColors && typeof board.repoColors === 'object' ? board.repoColors : {}
+        ticketUrl = text(board.ticketUrl)
+        ticketUrls = board.ticketUrls && typeof board.ticketUrls === 'object' ? board.ticketUrls : {}
+        oncallLabel = text(board.oncallLabel) || 'oncall'
+        const workers = list(board.workers)
+        const agents = getBoardAgents(board, workers)
+        const busy = agents.filter((a) => a.state === 'working').length + workers.length
+        byId('start').hidden = board.coordinatorLive === true
+        byId('open').hidden = board.coordinatorLive !== true
+        byId('dot').className = board.coordinatorLive ? 'dot live' : 'dot'
+        byId('dot').title = board.coordinatorLive ? 'coordinator live' : 'coordinator offline'
+        byId('updated').textContent = 'updated ' + getAgo(board.updatedAt)
+        byId('focus').textContent = text(board.focus)
+        byId('focus').title = text(board.focus)
+        byId('stats').replaceChildren(...renderStats(board, workers))
+        byId('instructions').replaceChildren(...section('Instructions', renderInstructions(board.instructions)))
+        byId('needs').replaceChildren(...section('Needs you', renderNeeds(board.decisions, workers)))
+        byId('work').replaceChildren(...section('Work', renderWork(board), '', 'No work yet. The coordinator adds tickets and tasks here.'))
+        byId('agents').replaceChildren(...linkHeading(section('Agents', renderAgents(agents, workers), busy ? busy + ' working' : '', 'No agents running.'), 'Open the Workspace Board', openBoard))
+      }
+
+      function showResult(message, actions, isError) {
+        const node = byId('result')
+        node.className = isError ? 'result error' : 'result'
+        const fold = el('details')
+        fold.append(el('summary', '', message))
+        const lines = list(actions)
+        fold.append(...(lines.length ? lines : ['no actions']).map((line) => el('div', 'actions-list trunc', line)))
+        node.replaceChildren(fold, button('×', () => node.replaceChildren(), 'icon'))
+      }
+
+      function getCleanupMessage(summary) {
+        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+        const counts = text(summary).match(/released (\d+) sessions, removed (\d+) worktrees, kept (\d+)/)
+        if (!counts) return 'Cleaned ' + time + ' · ' + text(summary)
+        if (counts[1] === '0' && counts[2] === '0') return 'Nothing to clean ' + time + ' · kept ' + counts[3]
+        return 'Cleaned ' + time + ' · released ' + counts[1] + ' sessions, removed ' + counts[2] + ' worktrees, kept ' + counts[3]
+      }
+
+      const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many)
+
+      // "Close 3 finished worker tabs · Remove 1 merged worktree" from a dry run's counts; '' = nothing to do.
+      function getCleanupPlan(counts) {
+        if (!counts) return ''
+        const steps = []
+        if (counts.released > 0) steps.push('Close ' + plural(counts.released, 'finished worker tab', 'finished worker tabs'))
+        if (counts.removed > 0) steps.push('Remove ' + plural(counts.removed, 'merged worktree', 'merged worktrees'))
+        return steps.join(' · ')
+      }
+
+      function closePlan() {
+        byId('plan').hidden = true
+        byId('plan').replaceChildren()
+      }
+
+      // Step 1: a dry run (changes nothing) shows what Clean up would do; Confirm runs it.
+      async function previewCleanup() {
+        const plan = byId('plan')
+        byId('result').replaceChildren()
+        plan.hidden = false
+        plan.replaceChildren(el('div', 'muted', 'Checking what can be cleaned up…'))
+        plan.firstChild.prepend(el('span', 'spinner'))
+        try {
+          const result = await orca.plugin.request('board.cleanup', { dryRun: true })
+          const what = getCleanupPlan(result?.counts)
+          const kept = result?.counts?.kept ? el('div', 'kept', 'Keeps ' + plural(result.counts.kept, 'worktree', 'worktrees') + ' with open PRs, local changes or unpushed commits') : null
+          if (!result?.counts) {
+            plan.replaceChildren(el('div', 'what', text(result?.summary) || 'Could not tell what Clean up would do'), el('div', 'actions'))
+          } else if (!what) {
+            plan.replaceChildren(el('div', 'what', 'Nothing to clean up'), ...(kept ? [kept] : []), el('div', 'actions'))
+          } else {
+            plan.replaceChildren(el('div', 'what', what), ...(kept ? [kept] : []), el('div', 'actions'))
+          }
+          const actions = plan.querySelector('.actions')
+          if (what) actions.append(button('Confirm', () => void runCleanup(), 'primary'))
+          actions.append(button(what ? 'Cancel' : 'OK', closePlan))
+        } catch (error) {
+          closePlan()
+          showResult('Cleanup check failed: ' + error.message, [], true)
+        }
+      }
+
+      // Step 2: after Confirm, the real run and its result line.
+      async function runCleanup() {
+        const plan = byId('plan')
+        for (const node of plan.querySelectorAll('button')) node.disabled = true
+        plan.querySelector('.actions')?.prepend(el('span', 'spinner'))
+        try {
+          const result = await orca.plugin.request('board.cleanup', { dryRun: false })
+          showResult(getCleanupMessage(result?.summary), result?.actions, false)
+        } catch (error) {
+          showResult('Cleanup failed: ' + error.message, [], true)
+        } finally {
+          closePlan()
+        }
+      }
+
+      function showSetup(isSetup) {
+        byId('setup').hidden = !isSetup
+        byId('board').hidden = isSetup || settingsOpen
+        byId('more').hidden = isSetup || settingsOpen
+        if (isSetup || settingsOpen) { setMenuOpen(false); closePlan() }
+        byId('gear').hidden = isSetup
+        if (isSetup) { byId('start').hidden = true; byId('open').hidden = true }
+      }
+
+      function field(label, control, top) {
+        const node = el('label', top ? 'field top' : 'field')
+        node.append(el('span', '', label), control)
+        return node
+      }
+
+      function input(value, type) {
+        const node = document.createElement('input')
+        node.type = type || 'text'
+        node.value = text(value)
+        return node
+      }
+
+      function select(options, value) {
+        const node = document.createElement('select')
+        node.append(...options.map((option) => {
+          const item = el('option', '', option.label ?? option)
+          item.value = text(option.value ?? option)
+          return item
+        }))
+        node.value = text(value)
+        return node
+      }
+
+      function checkbox(label, checked, note) {
+        const node = el('label', 'check')
+        const box = input('', 'checkbox')
+        box.checked = checked
+        node.append(box, el('span', 'trunc', label))
+        if (note) node.append(el('span', 'muted', note))
+        return { node, box }
+      }
+
+      function errorBox() {
+        const node = el('div', 'errors')
+        node.setAttribute('role', 'alert')
+        return node
+      }
+
+      function showErrors(node, lines) {
+        node.replaceChildren(...list(lines).map((line) => el('div', '', line)))
+      }
+
+      const inside = (child, root) => child === root || child.startsWith(root + '/')
+
+      // Ticketing + its URL template (needed when a ticketing tool is picked), and chat.
+      function toolFields(kinds, ticketing, issueUrl, chat) {
+        const ticket = select(list(kinds?.ticketing).length ? kinds.ticketing : ['none'], ticketing || 'none')
+        const url = input(issueUrl)
+        url.placeholder = 'https://…/issue/{id}'
+        const urlField = field('Ticket URL', url)
+        const sync = () => { urlField.hidden = ticket.value === 'none' }
+        ticket.onchange = sync
+        sync()
+        const chatSelect = select(list(kinds?.chat).length ? kinds.chat : ['none'], chat || 'none')
+        return { nodes: [field('Ticketing', ticket), urlField, field('Chat', chatSelect)], ticket, url, chat: chatSelect }
+      }
+
+      const titleCase = (value) => (value ? value[0].toUpperCase() + value.slice(1) : '')
+
+      // A repository's own ticketing and chat: "Default" uses the default block; the summary reads like "Linear · Slack" or "Default".
+      function repoToolFields(kinds, entry) {
+        const own = { touched: false, onChange: null }
+        const options = (names) => [{ value: '', label: 'Default' }, ...(list(names).length ? names : ['none']).map((kind) => ({ value: kind, label: titleCase(kind) }))]
+        const ticket = select(options(kinds?.ticketing), entry.ticketing?.kind ?? '')
+        const url = input(entry.ticketing?.issueUrl)
+        url.placeholder = 'https://…/issue/{id}'
+        const urlField = field('Ticket URL', url)
+        const chat = select(options(kinds?.chat), entry.chat?.kind ?? '')
+        const sync = () => { urlField.hidden = ticket.value === '' || ticket.value === 'none' }
+        const changed = () => { own.touched = true; sync(); own.onChange?.() }
+        ticket.onchange = changed
+        url.oninput = changed
+        chat.onchange = changed
+        sync()
+        own.node = el('div', 'repo-tools')
+        own.node.append(field('Ticketing', ticket), urlField, field('Chat', chat))
+        own.summary = () => (ticket.value === '' && chat.value === '' ? 'Default' : (titleCase(ticket.value) || 'Default') + ' · ' + (titleCase(chat.value) || 'Default'))
+        // Keeps the block's other keys (team, states, channels) when the tool stays the same.
+        own.value = () => ({
+          ticketing: ticket.value === '' ? null : { ...(entry.ticketing?.kind === ticket.value ? entry.ticketing : {}), kind: ticket.value, issueUrl: ticket.value === 'none' ? '' : url.value.trim() },
+          chat: chat.value === '' ? null : { ...(entry.chat?.kind === chat.value ? entry.chat : {}), kind: chat.value }
+        })
+        return own
+      }
+
+      // Orca's UI font (Geist) is not shared with plugin panels: the worker reads Orca's own file and
+      // hands it over in parts (panel messages are capped at 64 KB); without it the system font stays.
+      async function loadFont() {
+        try {
+          const first = await orca.plugin.request('panel.font', { part: 0 })
+          if (!first?.parts) return
+          const parts = [first.data]
+          for (let part = 1; part < first.parts; part++) parts.push((await orca.plugin.request('panel.font', { part })).data)
+          const face = new FontFace(first.family, 'url(data:font/woff2;base64,' + parts.join('') + ') format("woff2")', { weight: '100 900' })
+          document.fonts.add(await face.load())
+        } catch {
+          // keep the fallback font
+        }
+      }
+
+      function renderSetup(status) {
+        setupShown = true
+        showSetup(true)
+        byId('updated').textContent = 'not set up'
+        const nodes = [el('h2', '', 'Set up the coordinator'), el('p', '', 'It gets its rules, its board and the coordinator skill for your agent in this Orca folder. Nothing is committed, pushed or posted.')]
+        if (!status.node) nodes.push(el('p', 'note', 'Node.js 20.6 or newer is needed on your PATH (nodejs.org), then reopen this panel.'))
+        const workspaces = list(status.workspaces)
+        if (workspaces.length === 0) {
+          nodes.push(el('p', 'note', 'Add a folder or repository to Orca first (Add repository in the sidebar, or orca repo add <path>): the coordinator runs in one of them.'))
+          return byId('setup').replaceChildren(...nodes)
+        }
+        let workspace = workspaces[0]
+        const form = el('div', 'form')
+        const go = button('', () => void setup(), 'primary')
+        const label = () => { go.textContent = 'Set up in ' + workspace.name; go.title = workspace.path }
+        label()
+        const errors = errorBox()
+        const name = input(status.personName)
+        name.placeholder = 'How the coordinator addresses you'
+        const repos = list(status.repos)
+        const checks = el('div', 'checks')
+        const boxes = repos.map((repo) => {
+          const item = checkbox(repo.name, inside(repo.path, workspace.path), repo.path)
+          item.node.title = repo.path
+          checks.append(item.node)
+          return { repo, box: item.box }
+        })
+        if (repos.length === 0) checks.append(el('span', 'muted', 'No repositories in Orca yet'))
+        const tools = toolFields(status.adapters, 'none', '', 'none')
+        form.append(go)
+        if (workspaces.length > 1) {
+          const change = el('label', 'change')
+          const picker = select(workspaces.map((w) => ({ value: w.path, label: w.name })), workspace.path)
+          picker.onchange = () => {
+            workspace = workspaces.find((w) => w.path === picker.value) || workspace
+            label()
+            boxes.forEach(({ repo, box }) => { box.checked = inside(repo.path, workspace.path) })
+          }
+          change.append(el('span', '', 'Change folder'), picker)
+          form.append(change)
+        }
+        form.append(field('Your name', name), field('Repositories', checks, true), el('div', 'helper', 'The coordinator can start workers in the checked repositories.'), ...tools.nodes)
+        nodes.push(form, errors)
+        byId('setup').replaceChildren(...nodes)
+        byId('setup').querySelectorAll('button, input, select').forEach((node) => { node.disabled = !status.node })
+
+        async function setup() {
+          const controls = byId('setup').querySelectorAll('button, input, select')
+          controls.forEach((node) => { node.disabled = true })
+          showErrors(errors, [])
+          go.innerHTML = '<span class="spinner"></span>Setting up…'
+          byId('updated').textContent = 'setting up'
+          const options = {
+            workspace: workspace.path,
+            name: name.value.trim(),
+            repos: boxes.filter(({ box }) => box.checked).map(({ repo }) => repo.path),
+            ticketing: tools.ticket.value,
+            chat: tools.chat.value,
+            issueUrl: tools.ticket.value === 'none' ? '' : tools.url.value.trim()
+          }
+          try {
+            const result = await orca.plugin.request('setup.run', options)
+            const lines = text(result?.output).split('\n').filter(Boolean)
+            if (!result?.ok) throw Object.assign(new Error('Setup failed'), { lines })
+            showResult('Set up in ' + workspace.name + '. Start the coordinator when you are ready.', lines, false)
+            configured = true
+            showSetup(false)
+            await refresh()
+          } catch (error) {
+            showErrors(errors, error.lines ? ['Setup failed:', ...error.lines.slice(-8)] : ['Setup failed: ' + error.message])
+            controls.forEach((node) => { node.disabled = false })
+            label()
+            byId('updated').textContent = 'not set up'
+          }
+        }
+      }
+
+      // ---- settings: config.yaml through the worker (config.read / config.save) ----
+
+      function closeSettings() {
+        settingsOpen = false
+        byId('settings').hidden = true
+        byId('settings').replaceChildren()
+        showSetup(false)
+        void refresh()
+      }
+
+      async function openSettings() {
+        if (settingsOpen) return closeSettings()
+        settingsOpen = true
+        showSetup(false)
+        const view = byId('settings')
+        view.hidden = false
+        view.replaceChildren(el('div', 'ok', 'Loading settings…'))
+        try {
+          renderSettings(await orca.plugin.request('config.read'))
+        } catch (error) {
+          const errors = errorBox()
+          showErrors(errors, ['Could not read the settings: ' + error.message])
+          view.replaceChildren(el('h2', '', 'Settings'), errors, closeRow())
+        }
+      }
+
+      function closeRow() {
+        const row = el('div', 'form-actions')
+        row.append(button('Close', closeSettings))
+        return row
+      }
+
+      function renderSettings(read, notice) {
+        const view = byId('settings')
+        const errors = errorBox()
+        const config = read?.config
+        if (!config) {
+          showErrors(errors, list(read?.problems).length ? read.problems : ['No config to edit.'])
+          return view.replaceChildren(el('h2', '', 'Settings'), errors, closeRow())
+        }
+        if (list(read.problems).length) showErrors(errors, ['config.yaml has problems; fix them here or in the file:', ...read.problems])
+        const person = config.person || {}
+        const name = input(person.name)
+        const languages = LANGUAGES.some(([code]) => code === person.language) || !person.language ? LANGUAGES : [...LANGUAGES, [person.language, person.language]]
+        const language = select(languages.map(([value, label]) => ({ value, label })), person.language || 'en')
+        const tone = input(person.tone)
+
+        // Repos: the configured ones (kept as they are) plus Orca's others, unchecked.
+        const configured = list(config.repos)
+        const known = new Set(configured.map((repo) => text(repo.path)))
+        const offered = [...configured.map((repo) => ({ entry: repo, checked: true })), ...list(read.repos).filter((repo) => !known.has(repo.path)).map((repo) => ({ entry: { name: repo.name, path: repo.path, base: 'main' }, checked: false }))]
+        const adapters = config.adapters || {}
+        const tools = toolFields(read.adapters, adapters.ticketing?.kind, adapters.ticketing?.issueUrl, adapters.chat?.kind)
+
+        // Ticketing and chat belong to the project: each repository may use its own, collapsed under its row.
+        const repoChecks = el('div', 'checks')
+        const repoBoxes = offered.map(({ entry, checked }) => {
+          const row = el('div', 'repo-row')
+          const item = checkbox(text(entry.name), checked, text(entry.path))
+          item.node.title = text(entry.path)
+          const own = repoToolFields(read.adapters, entry)
+          const fold = el('details')
+          const summary = el('summary', '', own.summary())
+          fold.append(summary, own.node)
+          own.onChange = () => { summary.textContent = own.summary() }
+          row.append(item.node, fold)
+          repoChecks.append(row)
+          return { entry, box: item.box, own }
+        })
+        if (offered.length === 0) repoChecks.append(el('span', 'muted', 'No repositories in Orca yet'))
+        const reposLoaded = configured.map((repo) => text(repo.path))
+
+        // Entries of config.yaml that are not git repositories: ignored; one click removes each.
+        const skipped = list(read.skippedRepos).map((repo) => {
+          const row = el('div', 'helper')
+          const label = text(repo.name) || text(repo.path)
+          row.append(el('span', '', `"${label}" (${text(repo.path)}) is a folder, not a git repository, so the coordinator ignores it. `))
+          const remove = button('Remove from repositories', () => void removeRepo(repo, remove), 'ghost')
+          row.append(remove)
+          return row
+        })
+
+        const save = button('Save', () => void saveSettings(), 'primary')
+        const status = el('span', 'muted', notice)
+        const actions = el('div', 'form-actions')
+        actions.append(save, button('Cancel', closeSettings, 'ghost'), status)
+
+        const form = (title, ...fields) => {
+          const node = el('div', 'form')
+          node.append(...fields)
+          return [el('h2', '', title), node]
+        }
+        view.replaceChildren(
+          el('h2', '', 'Settings'),
+          el('div', 'path', read.path),
+          ...form('You', field('Name', name), field('Language', language), field('Tone', tone)),
+          ...form('Repositories', el('div', 'helper', 'The coordinator can start workers in these repositories. Each one can use its own ticketing and chat tool.'), ...skipped, repoChecks),
+          ...form('Default for other repositories', el('div', 'helper', 'Ticketing and chat for every repository set to Default.'), ...tools.nodes),
+          errors,
+          actions
+        )
+
+        async function removeRepo(repo, node) {
+          node.disabled = true
+          node.innerHTML = '<span class="spinner"></span>Removing…'
+          try {
+            const result = await orca.plugin.request('config.removeRepo', { path: text(repo.path) })
+            if (result?.saved) return renderSettings(await orca.plugin.request('config.read'), result.ok ? 'Removed' : 'Removed, but render failed')
+            showErrors(errors, list(result?.errors).length ? result.errors : ['Remove failed'])
+          } catch (error) {
+            showErrors(errors, ['Remove failed: ' + error.message])
+          }
+          node.disabled = false
+          node.textContent = 'Remove from repositories'
+        }
+
+        async function saveSettings() {
+          // Repos only when the selection changed, as additions and removals against what was loaded:
+          // a form opened before config.yaml changed cannot put back a removed entry.
+          // A repo's ticketing / chat is sent only when edited here (null = back to the default): other repos keep their own blocks.
+          const checked = repoBoxes.filter(({ box }) => box.checked)
+          const checkedRepos = checked.map(({ entry, own }) => {
+            const { ticketing, chat, ...rest } = entry
+            return own.touched ? { ...rest, ...own.value() } : rest
+          })
+          const reposChanged = checked.some(({ own }) => own.touched) || checkedRepos.length !== reposLoaded.length || checkedRepos.some((entry) => !reposLoaded.includes(text(entry.path)))
+          const patch = {
+            person: { name: name.value.trim(), language: language.value, tone: tone.value.trim() },
+            ...(reposChanged ? { repos: checkedRepos, reposLoaded } : {}),
+            adapters: { ticketing: { kind: tools.ticket.value, issueUrl: tools.url.value.trim() }, chat: { kind: tools.chat.value } }
+          }
+          const local = []
+          if (!patch.person.name) local.push('Name is empty')
+          if (patch.adapters.ticketing.kind !== 'none' && !patch.adapters.ticketing.issueUrl.includes('{id}')) local.push('The ticket URL template needs {id}')
+          for (const repo of checkedRepos) {
+            if (repo.ticketing && repo.ticketing.kind !== 'none' && !text(repo.ticketing.issueUrl).includes('{id}')) local.push(text(repo.name) + ': the ticket URL template needs {id}')
+          }
+          if (local.length) return showErrors(errors, local)
+          view.querySelectorAll('button, input, select').forEach((node) => { node.disabled = true })
+          showErrors(errors, [])
+          save.innerHTML = '<span class="spinner"></span>Saving…'
+          status.textContent = ''
+          try {
+            const result = await orca.plugin.request('config.save', { patch })
+            if (result?.ok) {
+              // Show what config.yaml now holds, read back, not what the form sent.
+              return renderSettings(await orca.plugin.request('config.read'), 'Saved and rendered')
+            }
+            showErrors(errors, list(result?.errors).length ? result.errors : ['Save failed'])
+            if (result?.saved) status.textContent = 'Saved'
+          } catch (error) {
+            showErrors(errors, ['Save failed: ' + error.message])
+          } finally {
+            view.querySelectorAll('button, input, select').forEach((node) => { node.disabled = false })
+            save.textContent = 'Save'
+          }
+        }
+      }
+
+      async function startCoordinator() {
+        const node = byId('start')
+        node.disabled = true
+        node.innerHTML = '<span class="spinner"></span>Starting…'
+        try {
+          const result = await orca.plugin.request('setup.start')
+          if (!result?.started) showResult('Could not start the coordinator', text(result?.output).split('\n').filter(Boolean), true)
+        } catch (error) {
+          showResult('Could not start the coordinator: ' + error.message, [], true)
+        } finally {
+          node.disabled = false
+          node.textContent = 'Start coordinator'
+        }
+      }
+
+      async function refresh() {
+        try {
+          if (settingsOpen) return
+          if (configured !== true) {
+            // The setup form is filled in by hand: the periodic refresh must not wipe it.
+            if (setupShown && !byId('setup').hidden) return
+            const status = await orca.plugin.request('setup.status')
+            configured = status?.configured === true
+            if (!configured) return renderSetup(status || {})
+            showSetup(false)
+          }
+          const board = await orca.plugin.request('board.get')
+          render(board && typeof board === 'object' ? board : {})
+        } catch (error) {
+          byId('updated').textContent = 'error: ' + error.message
+        }
+      }
+
+      // The ⋯ menu: opens under the button, closes on a pick, Escape or a click elsewhere.
+      function setMenuOpen(open) {
+        byId('more-menu').hidden = !open
+        byId('more').setAttribute('aria-expanded', String(open))
+        if (open) byId('cleanup').focus()
+      }
+      byId('more').innerHTML = ICONS.more
+      byId('more').onclick = (event) => { event.stopPropagation(); setMenuOpen(byId('more-menu').hidden) }
+      document.addEventListener('click', (event) => { if (!byId('more-menu').contains(event.target)) setMenuOpen(false) })
+      document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !byId('more-menu').hidden) { setMenuOpen(false); byId('more').focus() } })
+      byId('cleanup').onclick = () => { setMenuOpen(false); void previewCleanup() }
+      byId('start').onclick = () => void startCoordinator()
+      byId('open').innerHTML = ICONS.terminal
+      byId('open').onclick = () => orca.plugin.request('board.switch', {})
+      byId('gear').innerHTML = ICONS.gear
+      byId('gear').onclick = () => void openSettings()
+      void loadFont()
+      void refresh()
+      setInterval(refresh, 15000)
+    </script>
+  </body>
+</html>

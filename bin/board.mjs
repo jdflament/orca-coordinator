@@ -1,57 +1,94 @@
 #!/usr/bin/env node
-// Coordinator board — single source of truth for work state.
+// Coordinator board: the single file the Orca panel reads (schema/board.schema.json).
 // Agent-agnostic CLI: any agent (OpenCode, Claude, Codex, a human) edits the board
 // through this script so the shape stays valid and BOARD.md stays in sync.
 //
-// Usage: node bin/board.mjs <command> [args]
-// Run without arguments for the command list.
+// Board file: $COORDINATOR_BOARD, else <paths.state>/board.json from config.yaml,
+// else ./board/board.json. Run without arguments for the command list.
 
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { loadConfig } from './lib/config.mjs'
+import { validateAgainst } from './lib/validate.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
-const BOARD_FILE = process.env.COORDINATOR_BOARD || path.join(ROOT, 'board', 'board.json')
+const SCHEMA = JSON.parse(fs.readFileSync(path.join(ROOT, 'schema', 'board.schema.json'), 'utf8'))
+
+function resolveBoardFile() {
+  if (process.env.COORDINATOR_BOARD) return path.resolve(process.env.COORDINATOR_BOARD)
+  try {
+    const { config } = loadConfig({ strict: false })
+    if (config.paths.state) return path.join(config.paths.state, 'board.json')
+  } catch {
+    // fall through to the local default
+  }
+  return path.join(ROOT, 'board', 'board.json')
+}
+
+const BOARD_FILE = resolveBoardFile()
+const STATE_DIR = process.env.COORDINATOR_STATE || path.dirname(BOARD_FILE)
 const BOARD_MD = path.join(path.dirname(BOARD_FILE), 'BOARD.md')
 const INBOX_FILE = path.join(path.dirname(BOARD_FILE), 'inbox.jsonl')
+const INBOX_REJECTED = path.join(path.dirname(BOARD_FILE), 'inbox.rejected.jsonl')
 
-const TASK_STATES = ['queued', 'active', 'blocked', 'done']
-const WS_STATES = ['planned', 'active', 'paused', 'done']
-const AGENT_STATES = ['idle', 'working', 'waiting', 'stopped']
-const REPO_STATES = ['planned', 'building', 'review', 'shipped', 'blocked']
-const REPO_KINDS = ['repo', 'pr', 'feature']
-const INSTRUCTION_STATES = ['active', 'done']
+const VERSION = 2
+const LOG_KEPT = 20
+const enumOf = (p) => p.enum
+const TASK_STATES = enumOf(SCHEMA.properties.tasks.items.properties.status)
+const WS_STATES = enumOf(SCHEMA.properties.workstreams.items.properties.status)
+const AGENT_STATES = enumOf(SCHEMA.properties.agents.items.properties.state)
+const REPO_STATES = enumOf(SCHEMA.properties.repos.items.properties.status)
+const REPO_KINDS = enumOf(SCHEMA.properties.repos.items.properties.kind)
+const INSTRUCTION_STATES = enumOf(SCHEMA.properties.instructions.items.properties.status)
 
 const now = () => new Date().toISOString()
 
 function emptyBoard() {
   return {
-    version: 1,
+    version: VERSION,
     focus: '',
     updatedAt: now(),
-    seq: { task: 0, decision: 0, ws: 0, instruction: 0 },
+    seq: { decision: 0, instruction: 0 },
+    instructions: [],
+    decisions: [],
     workstreams: [],
     tasks: [],
     repos: [],
-    decisions: [],
     agents: [],
-    instructions: [],
     log: []
   }
 }
 
+// Only a missing file starts an empty board: an unreadable or corrupt one is refused, or the
+// next write would replace everything on it.
 function load() {
+  let text
   try {
-    const board = JSON.parse(fs.readFileSync(BOARD_FILE, 'utf8'))
-    return { ...emptyBoard(), ...board }
-  } catch {
-    return emptyBoard()
+    text = fs.readFileSync(BOARD_FILE, 'utf8')
+  } catch (err) {
+    if (err.code === 'ENOENT') return emptyBoard()
+    throw new Error(`cannot read ${BOARD_FILE}: ${err.message}`)
   }
+  let board
+  try {
+    board = JSON.parse(text)
+  } catch (err) {
+    throw new Error(`cannot read ${BOARD_FILE}: not valid JSON (${err.message}); fix the file or reset it with "init --force"`)
+  }
+  if (!board || typeof board !== 'object' || Array.isArray(board)) throw new Error(`cannot read ${BOARD_FILE}: not a board object`)
+  const merged = { ...emptyBoard(), ...board, seq: { ...emptyBoard().seq, ...(board.seq || {}) } }
+  merged.version = VERSION
+  if (!merged.seq.decision) merged.seq.decision = merged.decisions.reduce((max, d) => Math.max(max, Number(d.id) || 0), 0)
+  return merged
 }
 
 function save(board) {
   board.updatedAt = now()
-  if (board.log.length > 20) board.log = board.log.slice(-20)
+  if (board.log.length > LOG_KEPT) board.log = board.log.slice(-LOG_KEPT)
+  const problems = validateAgainst(SCHEMA, board)
+  if (problems.length) throw new Error(`refusing to write an invalid board:\n  ${problems.join('\n  ')}`)
   fs.mkdirSync(path.dirname(BOARD_FILE), { recursive: true })
   fs.writeFileSync(BOARD_FILE, JSON.stringify(board, null, 2) + '\n')
   render(board)
@@ -61,13 +98,13 @@ function log(board, text) {
   board.log.push({ at: now(), text })
 }
 
-function nextId(board, kind, prefix) {
+function nextId(board, kind) {
   board.seq[kind] = (board.seq[kind] || 0) + 1
-  return `${prefix}${board.seq[kind]}`
+  return board.seq[kind]
 }
 
 function findById(list, id) {
-  const item = list.find((x) => x.id === id)
+  const item = list.find((x) => String(x.id) === String(id))
   if (!item) throw new Error(`no item with id ${id}`)
   return item
 }
@@ -81,87 +118,86 @@ function option(name) {
   return i !== -1 && process.argv[i + 1] !== undefined ? process.argv[i + 1] : undefined
 }
 
-function toneFor(status) {
-  if (['done'].includes(status)) return 'success'
-  if (['blocked', 'paused', 'waiting'].includes(status)) return 'warning'
-  if (['active', 'working'].includes(status)) return 'accent'
-  return 'neutral'
+function assertState(value, allowed, what) {
+  if (!allowed.includes(value)) throw new Error(`${what} must be one of ${allowed.join('|')}`)
+}
+
+function copyOptions(target, keys) {
+  for (const key of keys) {
+    const value = option(key)
+    if (value !== undefined) target[key] = value
+  }
+}
+
+function setOncall(target) {
+  if (flag('oncall')) target.oncall = true
+  if (flag('no-oncall')) delete target.oncall
+}
+
+/** "done:Merge*|skip:Skip|explain:Explain" → options; `*` marks the recommended one. */
+function parseOptions(spec, recommend) {
+  return spec
+    .split('|')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((entry, i) => {
+      const recommended = entry.endsWith('*')
+      const clean = recommended ? entry.slice(0, -1) : entry
+      const [id, label] = clean.includes(':') ? clean.split(/:(.*)/s) : [clean.toLowerCase().replace(/\s+/g, '-'), clean]
+      const option = { id, label }
+      if (recommended || (recommend !== undefined && (recommend === String(i + 1) || recommend === id || recommend === label))) option.recommended = true
+      return option
+    })
 }
 
 function render(board) {
   const lines = []
-  lines.push(`# Coordinator board`)
-  lines.push('')
-  lines.push(`> Updated ${board.updatedAt}`)
-  lines.push('')
-  lines.push(`**Focus:** ${board.focus || '—'}`)
-  lines.push('')
+  lines.push('# Coordinator board', '', `> Updated ${board.updatedAt}`, '', `**Focus:** ${board.focus || '—'}`, '')
 
-  if (board.instructions?.length) {
-    lines.push('## Instructions')
-    lines.push('')
-    for (const i of board.instructions) {
-      lines.push(`- ${i.status === 'done' ? '✅' : '▶'} ${i.text}${i.to ? ` — _to ${i.to}_` : ''}`)
-    }
+  if (board.instructions.length) {
+    lines.push('## Instructions', '')
+    for (const i of board.instructions) lines.push(`- ${i.status === 'done' ? '✅' : '▶'} ${i.text}`)
     lines.push('')
   }
 
-  if (board.workstreams.length) {
-    lines.push('## Workstreams')
-    lines.push('')
-    for (const ws of board.workstreams) {
-      lines.push(`- **${ws.title}** \`${ws.id}\` — ${ws.status}${ws.progress != null ? ` (${ws.progress}%)` : ''}${ws.notes ? ` — ${ws.notes}` : ''}`)
-    }
-    lines.push('')
-  }
-
-  lines.push('## Tasks')
-  lines.push('')
-  if (board.tasks.length) {
-    lines.push('| id | task | status | kind | assignee |')
-    lines.push('|----|------|--------|------|----------|')
-    for (const t of board.tasks) {
-      lines.push(`| ${t.id} | ${t.title} | ${t.status} | ${t.kind || ''} | ${t.assignee || ''} |`)
-    }
-  } else {
-    lines.push('_none_')
-  }
-  lines.push('')
-
-  if (board.repos?.length) {
-    lines.push('## Repos / PRs / Features')
-    lines.push('')
-    for (const r of board.repos) {
-      lines.push(`- **${r.name}** (${r.kind}) — ${r.status}${r.detail ? ` — ${r.detail}` : ''}${r.url ? ` — ${r.url}` : ''}`)
-    }
-    lines.push('')
-  }
-
-  lines.push('## Decisions')
-  lines.push('')
+  lines.push('## Decisions (needs you)', '')
   if (board.decisions.length) {
     for (const d of board.decisions) {
       const opts = d.options.map((o) => `${o.label}${o.recommended ? ' ★' : ''}`).join(' / ')
-      lines.push(`- **${d.title}** \`${d.id}\` — ${d.status === 'answered' ? `✅ ${d.answer || ''}` : `❓ ${opts}`}${d.context ? ` — _${d.context}_` : ''}`)
+      const head = `- **${d.title}** \`${d.id}\`${d.repo ? ` (${d.repo})` : ''}${d.oncall ? ' 🔴 oncall' : ''} — ${d.action || ''}`
+      lines.push(`${head}: ${d.status === 'answered' ? `✅ ${d.answer || ''}` : `❓ ${opts}`}${d.context ? ` — _${d.context}_` : ''}${d.url ? ` — ${d.url}` : ''}`)
     }
-  } else {
-    lines.push('_none_')
-  }
+  } else lines.push('_none_')
   lines.push('')
 
-  lines.push('## Agents')
-  lines.push('')
-  if (board.agents.length) {
-    for (const a of board.agents) {
-      lines.push(`- **${a.name}** (${a.role || 'agent'}) — ${a.state}${a.detail ? ` — ${a.detail}` : ''}`)
+  if (board.workstreams.length) {
+    lines.push('## Workstreams', '')
+    for (const ws of board.workstreams) {
+      const own = board.tasks.filter((t) => t.ws === ws.id)
+      const progress = ws.progress != null ? ws.progress : own.length ? Math.round((100 * own.filter((t) => t.status === 'merged').length) / own.length) : null
+      lines.push(`- **${ws.title}** \`${ws.id}\` — ${ws.status}${progress != null ? ` (${progress}%)` : ''}${ws.oncall ? ' 🔴 oncall' : ''}${ws.notes ? ` — ${ws.notes}` : ''}`)
+      for (const t of own) lines.push(`  - ${t.id} · ${t.repo || ''} · ${t.status}${t.pr ? ` · #${t.pr}` : ''}${t.detail ? ` — ${t.detail}` : ''}`)
     }
-  } else {
-    lines.push('_none_')
+    lines.push('')
   }
-  lines.push('')
 
-  lines.push('## Log')
-  lines.push('')
+  const orphans = board.tasks.filter((t) => !board.workstreams.some((ws) => ws.id === t.ws))
+  if (orphans.length) {
+    lines.push('## Tasks without workstream', '')
+    for (const t of orphans) lines.push(`- ${t.id} · ${t.repo || ''} · ${t.status}${t.pr ? ` · #${t.pr}` : ''}${t.detail ? ` — ${t.detail}` : ''}`)
+    lines.push('')
+  }
+
+  if (board.repos.length) {
+    lines.push('## Repos / PRs', '')
+    for (const r of board.repos) lines.push(`- **${r.name}** (${r.kind}${r.repo ? `, ${r.repo}` : ''}) — ${r.status}${r.detail ? ` — ${r.detail}` : ''}${r.url ? ` — ${r.url}` : ''}`)
+    lines.push('')
+  }
+
+  lines.push('## Agents', '')
+  if (board.agents.length) for (const a of board.agents) lines.push(`- **${a.name}**${a.repo ? ` (${a.repo})` : ''} — ${a.state}${a.detail ? ` — ${a.detail}` : ''}`)
+  else lines.push('_none_')
+  lines.push('', '## Log', '')
   for (const e of board.log.slice(-10)) lines.push(`- ${e.at} — ${e.text}`)
   lines.push('')
 
@@ -169,20 +205,49 @@ function render(board) {
   fs.writeFileSync(BOARD_MD, lines.join('\n'))
 }
 
+function runScript(name, args) {
+  const result = spawnSync('bash', [path.join(ROOT, 'bin', name), ...args], {
+    stdio: 'inherit',
+    env: { ...process.env, COORDINATOR_STATE: STATE_DIR, COORDINATOR_PACKAGE: ROOT }
+  })
+  if (result.error) throw result.error
+  process.exitCode = result.status ?? 1
+}
+
 // ---- commands ----
 
 const commands = {
   show() {
     const board = load()
-    if (flag('json')) {
-      console.log(JSON.stringify(board, null, 2))
-    } else {
+    if (flag('json')) console.log(JSON.stringify(board, null, 2))
+    else {
+      render(board)
       console.log(fs.readFileSync(BOARD_MD, 'utf8'))
     }
   },
 
   path() {
     console.log(BOARD_FILE)
+  },
+
+  init() {
+    if (fs.existsSync(BOARD_FILE) && !flag('force')) throw new Error(`${BOARD_FILE} exists (use --force to reset)`)
+    save(emptyBoard())
+    console.log(BOARD_FILE)
+  },
+
+  validate() {
+    let board
+    try {
+      board = JSON.parse(fs.readFileSync(BOARD_FILE, 'utf8'))
+    } catch (err) {
+      throw new Error(`cannot read ${BOARD_FILE}: ${err.message}`)
+    }
+    const problems = validateAgainst(SCHEMA, board)
+    if (problems.length) {
+      for (const p of problems) console.log(p)
+      process.exitCode = 1
+    } else console.log(`${BOARD_FILE}: valid`)
   },
 
   focus(text) {
@@ -193,88 +258,105 @@ const commands = {
     console.log(board.focus)
   },
 
-  'ws:add'(title) {
-    if (!title) throw new Error('usage: ws:add <title> [--status planned|active|paused|done] [--progress N] [--notes ..] [--owner ..]')
+  'ws:add'(id) {
+    if (!id) throw new Error('usage: ws:add <id> [--title ..] [--url ..] [--status planned|ready|active|paused|done] [--progress N] [--notes ..] [--oncall]')
     const board = load()
+    if (board.workstreams.some((ws) => ws.id === id)) throw new Error(`workstream ${id} exists`)
     const status = option('status') || 'planned'
-    if (!WS_STATES.includes(status)) throw new Error(`status must be one of ${WS_STATES.join('|')}`)
+    assertState(status, WS_STATES, 'status')
     const progress = option('progress')
-    const ws = { id: nextId(board, 'ws', 'ws'), title, status, progress: progress === undefined ? null : Number(progress), owner: option('owner') || '', notes: option('notes') || '' }
+    const ws = { id, title: option('title') || id, url: option('url') || '', status, progress: progress === undefined ? null : Number(progress), notes: option('notes') || '' }
+    setOncall(ws)
     board.workstreams.push(ws)
-    log(board, `workstream added: ${title}`)
+    log(board, `workstream added: ${ws.title}`)
     save(board)
     console.log(ws.id)
   },
 
   'ws:set'(id) {
-    if (!id) throw new Error('usage: ws:set <id> [--status ..] [--progress N] [--notes ..] [--title ..]')
+    if (!id) throw new Error('usage: ws:set <id> [--status ..] [--progress N|""] [--notes ..] [--title ..] [--url ..] [--oncall|--no-oncall]')
     const board = load()
     const ws = findById(board.workstreams, id)
     const status = option('status')
     if (status) {
-      if (!WS_STATES.includes(status)) throw new Error(`status must be one of ${WS_STATES.join('|')}`)
+      assertState(status, WS_STATES, 'status')
       ws.status = status
     }
     const progress = option('progress')
     if (progress !== undefined) ws.progress = progress === '' ? null : Number(progress)
-    for (const k of ['notes', 'title', 'owner']) {
-      const v = option(k)
-      if (v !== undefined) ws[k] = v
-    }
+    copyOptions(ws, ['notes', 'title', 'url'])
+    setOncall(ws)
     log(board, `workstream ${id} → ${ws.status}${ws.progress != null ? ` ${ws.progress}%` : ''}`)
     save(board)
     console.log(`${ws.id} ${ws.status}`)
   },
 
-  'task:add'(title) {
-    if (!title) throw new Error('usage: task:add <title> [--ws id] [--kind subagent|orca-worker|self|human] [--assignee ..] [--status ..]')
+  'ws:rm'(id) {
+    if (!id) throw new Error('usage: ws:rm <id>')
     const board = load()
-    const status = option('status') || 'queued'
-    if (!TASK_STATES.includes(status)) throw new Error(`status must be one of ${TASK_STATES.join('|')}`)
-    const task = {
-      id: nextId(board, 'task', 't'),
-      title,
-      status,
-      kind: option('kind') || 'self',
-      assignee: option('assignee') || '',
-      ws: option('ws') || '',
-      detail: option('detail') || '',
-      startedAt: status === 'active' ? now() : null
-    }
+    findById(board.workstreams, id)
+    board.workstreams = board.workstreams.filter((ws) => ws.id !== id)
+    log(board, `workstream removed: ${id}`)
+    save(board)
+    console.log(`${id} removed`)
+  },
+
+  'task:add'(id) {
+    if (!id) throw new Error('usage: task:add <ticket id> [--ws <workstream id>] [--repo ..] [--status local|pr|hold|blocked|merged] [--pr N] [--url ..] [--detail ..] [--oncall]')
+    const board = load()
+    if (board.tasks.some((t) => t.id === id)) throw new Error(`task ${id} exists`)
+    const status = option('status') || 'local'
+    assertState(status, TASK_STATES, 'status')
+    const task = { id, ws: option('ws') || '', repo: option('repo') || '', status, url: option('url') || '', detail: option('detail') || '' }
+    const pr = option('pr')
+    if (pr !== undefined) task.pr = Number(pr)
+    setOncall(task)
     board.tasks.push(task)
-    log(board, `task added: ${title}`)
+    log(board, `task added: ${id}${task.repo ? ` (${task.repo})` : ''}`)
     save(board)
     console.log(task.id)
   },
 
   'task:set'(id) {
-    if (!id) throw new Error('usage: task:set <id> [--status ..] [--assignee ..] [--detail ..]')
+    if (!id) throw new Error('usage: task:set <ticket id> [--status ..] [--pr N] [--url ..] [--detail ..] [--repo ..] [--ws ..] [--oncall|--no-oncall]')
     const board = load()
     const task = findById(board.tasks, id)
     const status = option('status')
     if (status) {
-      if (!TASK_STATES.includes(status)) throw new Error(`status must be one of ${TASK_STATES.join('|')}`)
+      assertState(status, TASK_STATES, 'status')
       task.status = status
-      if (status === 'active' && !task.startedAt) task.startedAt = now()
-      if (status === 'done') task.doneAt = now()
+      if (status === 'merged') task.mergedAt = now()
     }
-    for (const k of ['assignee', 'detail', 'kind']) {
-      const v = option(k)
-      if (v !== undefined) task[k] = v
-    }
-    log(board, `task ${task.id} → ${task.status}${task.assignee ? ` (${task.assignee})` : ''}`)
+    const pr = option('pr')
+    if (pr !== undefined) task.pr = Number(pr)
+    copyOptions(task, ['url', 'detail', 'repo', 'ws'])
+    setOncall(task)
+    log(board, `task ${task.id} → ${task.status}${task.pr ? ` #${task.pr}` : ''}`)
     save(board)
     console.log(`${task.id} ${task.status}`)
   },
 
-  'repo:add'(name) {
-    if (!name) throw new Error('usage: repo:add <name> [--kind repo|pr|feature] [--status ..] [--detail ..] [--url ..]')
+  'task:rm'(id) {
+    if (!id) throw new Error('usage: task:rm <ticket id>')
     const board = load()
-    const kind = option('kind') || 'repo'
-    if (!REPO_KINDS.includes(kind)) throw new Error(`kind must be one of ${REPO_KINDS.join('|')}`)
-    const status = option('status') || 'planned'
-    if (!REPO_STATES.includes(status)) throw new Error(`status must be one of ${REPO_STATES.join('|')}`)
-    const repo = { id: nextId(board, 'repo', 'r'), name, kind, status, detail: option('detail') || '', url: option('url') || '' }
+    findById(board.tasks, id)
+    board.tasks = board.tasks.filter((t) => t.id !== id)
+    log(board, `task removed: ${id}`)
+    save(board)
+    console.log(`${id} removed`)
+  },
+
+  'repo:add'(name) {
+    if (!name) throw new Error('usage: repo:add <name> [--id <ticket>] [--kind repo|pr|feature] [--repo ..] [--status ..] [--detail ..] [--url ..] [--oncall]')
+    const board = load()
+    const kind = option('kind') || 'pr'
+    assertState(kind, REPO_KINDS, 'kind')
+    const status = option('status') || 'review'
+    assertState(status, REPO_STATES, 'status')
+    const id = option('id') || name
+    if (board.repos.some((r) => r.id === id)) throw new Error(`repo entry ${id} exists`)
+    const repo = { id, name, kind, repo: option('repo') || '', status, detail: option('detail') || '', url: option('url') || '' }
+    setOncall(repo)
     board.repos.push(repo)
     log(board, `repo added: ${name} (${kind}, ${status})`)
     save(board)
@@ -282,38 +364,43 @@ const commands = {
   },
 
   'repo:set'(id) {
-    if (!id) throw new Error('usage: repo:set <id> [--status ..] [--detail ..] [--url ..]')
+    if (!id) throw new Error('usage: repo:set <id> [--status ..] [--detail ..] [--url ..] [--name ..] [--repo ..] [--oncall|--no-oncall]')
     const board = load()
     const repo = findById(board.repos, id)
     const status = option('status')
     if (status) {
-      if (!REPO_STATES.includes(status)) throw new Error(`status must be one of ${REPO_STATES.join('|')}`)
+      assertState(status, REPO_STATES, 'status')
       repo.status = status
     }
-    for (const k of ['detail', 'url', 'name', 'kind']) {
-      const v = option(k)
-      if (v !== undefined) repo[k] = v
-    }
+    copyOptions(repo, ['detail', 'url', 'name', 'repo', 'kind'])
+    setOncall(repo)
     log(board, `repo ${repo.name} → ${repo.status}`)
     save(board)
     console.log(`${repo.id} ${repo.status}`)
   },
 
+  'repo:rm'(id) {
+    if (!id) throw new Error('usage: repo:rm <id>')
+    const board = load()
+    findById(board.repos, id)
+    board.repos = board.repos.filter((r) => r.id !== id)
+    log(board, `repo removed: ${id}`)
+    save(board)
+    console.log(`${id} removed`)
+  },
+
   'agent:set'(name, state) {
-    if (!name || !state) throw new Error(`usage: agent:set <name> <${AGENT_STATES.join('|')}> [--role ..] [--detail ..]`)
-    if (!AGENT_STATES.includes(state)) throw new Error(`state must be one of ${AGENT_STATES.join('|')}`)
+    if (!name || !state) throw new Error(`usage: agent:set <name> <${AGENT_STATES.join('|')}> [--id <dispatch>] [--repo ..] [--role ..] [--detail ..]`)
+    assertState(state, AGENT_STATES, 'state')
     const board = load()
     let agent = board.agents.find((a) => a.name === name)
     if (!agent) {
-      agent = { id: name, name, role: 'worker', state, detail: '', updatedAt: now() }
+      agent = { id: option('id') || name, name, role: 'worker', state, detail: '', updatedAt: now() }
       board.agents.push(agent)
     }
     agent.state = state
     agent.updatedAt = now()
-    for (const k of ['role', 'detail']) {
-      const v = option(k)
-      if (v !== undefined) agent[k] = v
-    }
+    copyOptions(agent, ['id', 'repo', 'role', 'detail'])
     log(board, `agent ${name} → ${state}`)
     save(board)
     console.log(`${name} ${state}`)
@@ -322,8 +409,7 @@ const commands = {
   'agent:rm'(name) {
     if (!name) throw new Error('usage: agent:rm <name>')
     const board = load()
-    const agent = board.agents.find((a) => a.name === name)
-    if (!agent) throw new Error(`no agent named ${name}`)
+    if (!board.agents.some((a) => a.name === name)) throw new Error(`no agent named ${name}`)
     if (name === 'coordinator') throw new Error('the coordinator stays on the board')
     board.agents = board.agents.filter((a) => a.name !== name)
     log(board, `agent removed: ${name}`)
@@ -333,29 +419,23 @@ const commands = {
 
   clean() {
     const board = load()
-    const open = (t) => t.status !== 'done'
-    const removed = board.agents
-      .filter((a) => a.name !== 'coordinator' && ['idle', 'stopped'].includes(a.state) && !board.tasks.some((t) => open(t) && t.assignee === a.name))
-      .map((a) => a.name)
-    if (removed.length) {
-      board.agents = board.agents.filter((a) => !removed.includes(a.name))
-      log(board, `agents cleaned: ${removed.join(', ')}`)
+    const removed = board.agents.filter((a) => a.name !== 'coordinator' && ['idle', 'stopped'].includes(a.state)).map((a) => a.name)
+    const settled = board.decisions.filter((d) => d.status === 'answered').map((d) => d.id)
+    if (removed.length) board.agents = board.agents.filter((a) => !removed.includes(a.name))
+    if (settled.length) board.decisions = board.decisions.filter((d) => d.status !== 'answered')
+    if (removed.length || settled.length) {
+      log(board, `cleaned: ${[...removed, ...settled.map((id) => `decision ${id}`)].join(', ')}`)
       save(board)
     }
-    if (removed.length) for (const name of removed) console.log(name)
-    else console.log('nothing to clean')
+    for (const name of removed) console.log(name)
+    for (const id of settled) console.log(`decision ${id}`)
+    if (!removed.length && !settled.length) console.log('nothing to clean')
   },
 
   'instruction:add'(text) {
-    if (!text) throw new Error('usage: instruction:add <text> [--to <coordinator>]')
+    if (!text) throw new Error('usage: instruction:add <text>')
     const board = load()
-    const instruction = {
-      id: nextId(board, 'instruction', 'i'),
-      text,
-      to: option('to') || 'coordinator',
-      status: 'active',
-      createdAt: now()
-    }
+    const instruction = { id: `i${nextId(board, 'instruction')}`, text, status: 'active', createdAt: now() }
     board.instructions.push(instruction)
     log(board, `instruction added: ${text}`)
     save(board)
@@ -363,41 +443,30 @@ const commands = {
   },
 
   'instruction:set'(id) {
-    if (!id) throw new Error('usage: instruction:set <id> [--status active|done]')
+    if (!id) throw new Error('usage: instruction:set <id> [--status active|done] [--text ..]')
     const board = load()
     const instruction = findById(board.instructions, id)
     const status = option('status')
     if (status) {
-      if (!INSTRUCTION_STATES.includes(status)) throw new Error(`status must be one of ${INSTRUCTION_STATES.join('|')}`)
+      assertState(status, INSTRUCTION_STATES, 'status')
       instruction.status = status
       if (status === 'done') instruction.doneAt = now()
     }
+    copyOptions(instruction, ['text'])
     log(board, `instruction ${id} → ${instruction.status}`)
     save(board)
     console.log(`${instruction.id} ${instruction.status}`)
   },
 
   ask(title) {
-    if (!title) throw new Error('usage: ask <title> [--context ..] [--options "label1|label2"] [--recommend <index or label>]')
+    if (!title) throw new Error('usage: ask <title> [--repo ..] [--url ..] [--action <verb>] [--context ..] [--options "id:Label*|id:Label"] [--recommend <id|label>] [--oncall]')
     const board = load()
-    const labels = (option('options') || 'yes|no').split('|').map((s) => s.trim()).filter(Boolean)
-    const recommend = option('recommend')
-    const options = labels.map((label, i) => ({
-      id: `o${i + 1}`,
-      label,
-      recommended: recommend !== undefined && (recommend === String(i + 1) || recommend === label)
-    }))
-    const decision = {
-      id: nextId(board, 'decision', 'd'),
-      title,
-      context: option('context') || '',
-      options,
-      status: 'pending',
-      answer: '',
-      createdAt: now()
-    }
+    const action = option('action') || 'Decide'
+    const options = parseOptions(option('options') || `done:${action}*|skip:Skip|explain:Explain`, option('recommend'))
+    const decision = { id: nextId(board, 'decision'), title, repo: option('repo') || '', url: option('url') || '', action, context: option('context') || '', options, status: 'pending', createdAt: now() }
+    setOncall(decision)
     board.decisions.push(decision)
-    log(board, `decision raised: ${title}`)
+    log(board, `decision ${decision.id} raised: ${title} (${action})`)
     save(board)
     console.log(decision.id)
   },
@@ -418,6 +487,16 @@ const commands = {
     console.log(`${d.id} → ${d.answer}`)
   },
 
+  'decision:rm'(id) {
+    if (!id) throw new Error('usage: decision:rm <decisionId>')
+    const board = load()
+    findById(board.decisions, id)
+    board.decisions = board.decisions.filter((d) => String(d.id) !== String(id))
+    log(board, `decision ${id} removed`)
+    save(board)
+    console.log(`${id} removed`)
+  },
+
   log(text) {
     if (!text) throw new Error('usage: log <text>')
     const board = load()
@@ -426,27 +505,43 @@ const commands = {
     console.log('ok')
   },
 
-  // Decision clicks and quick actions from the Orca panel land in inbox.jsonl;
-  // this drains them: decisions settle on the board, commands and messages are
-  // logged (and printed) for the coordinator to act on.
+  // The panel sends clicks as terminal text to the coordinator by default; an
+  // inbox.jsonl (written when the coordinator terminal is offline) is drained here.
+  // The inbox is moved aside before it is read, so a click the panel appends meanwhile lands in a
+  // fresh inbox.jsonl; the moved file is deleted only once the board is saved (a failed save
+  // leaves it for the next drain). Lines that are not JSON go to inbox.rejected.jsonl.
   inbox() {
-    let lines = []
+    const dir = path.dirname(INBOX_FILE)
     try {
-      lines = fs.readFileSync(INBOX_FILE, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l))
-    } catch {
-      lines = []
+      fs.renameSync(INBOX_FILE, path.join(dir, `inbox.draining-${String(Date.now()).padStart(15, '0')}-${process.pid}.jsonl`))
+    } catch (err) {
+      if (err.code !== 'ENOENT') throw err
+    }
+    const drains = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => /^inbox\.draining-.*\.jsonl$/.test(f)).sort().map((f) => path.join(dir, f)) : []
+    const lines = []
+    const rejected = []
+    for (const file of drains) {
+      for (const raw of fs.readFileSync(file, 'utf8').split('\n')) {
+        if (!raw.trim()) continue
+        try {
+          const entry = JSON.parse(raw)
+          if (!entry || typeof entry !== 'object') throw new Error('not an object')
+          lines.push(entry)
+        } catch {
+          rejected.push(raw)
+        }
+      }
     }
     const board = load()
     let applied = 0
     for (const entry of lines) {
       const kind = entry.kind || (entry.decisionId ? 'decision' : 'message')
       if (kind === 'decision') {
-        const d = board.decisions.find((x) => x.id === entry.decisionId)
+        const d = board.decisions.find((x) => String(x.id) === String(entry.decisionId))
         if (!d || d.status === 'answered') continue
         d.status = 'answered'
         d.answer = entry.optionLabel || entry.optionId
         d.answeredAt = entry.at
-        d.source = 'panel'
         log(board, `decision ${d.id} answered from panel: ${d.answer}`)
         applied++
       } else if (kind === 'command') {
@@ -458,13 +553,29 @@ const commands = {
       }
     }
     if (applied) save(board)
-    if (lines.length) fs.writeFileSync(INBOX_FILE, '')
-    console.log(JSON.stringify({ applied, entries: lines }))
+    if (rejected.length) fs.appendFileSync(INBOX_REJECTED, rejected.map((l) => l + '\n').join(''))
+    for (const file of drains) fs.unlinkSync(file)
+    const result = { applied, entries: lines }
+    if (rejected.length) result.rejected = rejected.length
+    console.log(JSON.stringify(result))
+    if (rejected.length) console.error(`board: ${rejected.length} inbox line(s) were not JSON, kept in ${INBOX_REJECTED}`)
   },
 
   render() {
     render(load())
     console.log(BOARD_MD)
+  },
+
+  lessons(...args) {
+    runScript('lessons.sh', args)
+  },
+
+  metrics(...args) {
+    runScript('metrics.sh', args)
+  },
+
+  state(...args) {
+    runScript('state.sh', args)
   }
 }
 
@@ -474,23 +585,34 @@ function usage() {
 commands:
   show [--json]                       print BOARD.md (or raw JSON)
   path                                print the board file path
+  init [--force]                      create an empty board
+  validate                            check the file against schema/board.schema.json
   focus <text>                        set the current focus line
-  ws:add <title> [--status planned|active|paused|done] [--progress N] [--notes ..] [--owner ..]
-  ws:set <id> [--status planned|active|paused|done] [--progress N] [--notes ..] [--title ..]
-  task:add <title> [--ws id] [--kind subagent|orca-worker|self|human] [--assignee ..] [--status ..]
-  task:set <id> [--status queued|active|blocked|done] [--assignee ..] [--detail ..]
-  repo:add <name> [--kind repo|pr|feature] [--status planned|building|review|shipped|blocked] [--detail ..] [--url ..]
-  repo:set <id> [--status planned|building|review|shipped|blocked] [--detail ..] [--url ..]
-  agent:set <name> <idle|working|waiting|stopped> [--role ..] [--detail ..]
+  ws:add <id> [--title ..] [--url ..] [--status ${WS_STATES.join('|')}] [--progress N] [--notes ..] [--oncall]
+  ws:set <id> [--status ..] [--progress N|""] [--notes ..] [--title ..] [--url ..] [--oncall|--no-oncall]
+  ws:rm <id>
+  task:add <ticket> [--ws <ws id>] [--repo ..] [--status ${TASK_STATES.join('|')}] [--pr N] [--url ..] [--detail ..] [--oncall]
+  task:set <ticket> [--status ..] [--pr N] [--url ..] [--detail ..] [--repo ..] [--ws ..] [--oncall|--no-oncall]
+  task:rm <ticket>
+  repo:add <name> [--id <ticket>] [--kind ${REPO_KINDS.join('|')}] [--repo ..] [--status ${REPO_STATES.join('|')}] [--detail ..] [--url ..]
+  repo:set <id> [--status ..] [--detail ..] [--url ..] [--name ..] [--repo ..]
+  repo:rm <id>
+  agent:set <name> <${AGENT_STATES.join('|')}> [--id <dispatch>] [--repo ..] [--role ..] [--detail ..]
   agent:rm <name>                     remove an agent from the board (never the coordinator)
-  clean                               prune idle agents with no open tasks
-  instruction:add <text> [--to <coordinator>]   record a standing user instruction
-  instruction:set <id> [--status active|done]
-  ask <title> [--context ..] [--options "a|b"] [--recommend <label>]
+  clean                               prune idle/stopped agents and answered decisions
+  instruction:add <text>              record a standing instruction from the human
+  instruction:set <id> [--status ${INSTRUCTION_STATES.join('|')}] [--text ..]
+  ask <title> [--repo ..] [--url ..] [--action <verb>] [--context ..] [--options "id:Label*|id:Label"] [--recommend <id>] [--oncall]
   answer <decisionId> <optionId|label> [--note ..]
-  log <text>                          append a log entry
-  inbox                               drain panel decision clicks into the board
-  render                              regenerate BOARD.md`)
+  decision:rm <decisionId>
+  log <text>                          append a log entry (last ${LOG_KEPT} kept)
+  inbox                               drain inbox.jsonl (offline panel clicks) into the board
+  render                              regenerate BOARD.md
+  lessons add "<miss>" "<rule>" | lessons list [--days N]    (bin/lessons.sh)
+  metrics                             append one row to metrics.tsv      (bin/metrics.sh)
+  state [check|waiting|archive]       state.md budget, waiting items, archive done items (bin/state.sh)
+
+Panel clicks reach the coordinator terminal as text: "<option> <decisionId>", "nudge <ticket>", "stop <agent>".`)
 }
 
 const [cmd, ...args] = process.argv.slice(2)

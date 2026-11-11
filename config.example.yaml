@@ -1,0 +1,92 @@
+# orca-coordinator config. Lives at ~/.config/orca-coordinator/config.yaml
+# (or $ORCA_COORDINATOR_CONFIG). A project may add .orca-coordinator.yaml at
+# its root to override keys. No secrets here: credentials stay in the OS keychain
+# (secretRef: keychain:<service>), in an env var (env:NAME) or in a file (file:<path>).
+
+person:
+  name: Alex                      # how the coordinator addresses you
+  github: alex-dev                # your GitHub login
+  language: en                    # language of drafts the coordinator writes for you
+  tone: plain, 2-4 sentences      # tone of those drafts
+  uiTermsLanguage: en             # UI labels are quoted in this language, never translated
+  voiceFile: null                 # optional file with samples of your review voice
+
+paths:
+  package: ~/src/orca-coordinator           # this clone (init fills it in)
+  state: ~/.local/state/orca-coordinator    # state.md, board.json, reports/, lessons.md, metrics.tsv
+  workspace: ~/code                         # the Orca workspace folder the coordinator runs in
+  worktreeRoot: ~/worktrees                 # where Orca creates worktrees (init detects it; cleanup only touches these)
+  orca: /Applications/Orca.app/Contents/Resources/bin/orca
+
+agents:
+  coordinator: {agent: claude, statusline: true}
+  worker: {agent: claude, model: null, extraArgs: "", permissionsFile: ~/.claude/settings.json}
+  automation: {provider: claude}
+
+git:
+  branchPattern: "{github}/{ticket-lower}"   # ticket worktree branches
+  prTitlePattern: "{ticket}: {title}"
+  protectedBranches: [main, master, develop]
+
+# Git repositories only (the top of a work tree); a plain folder here is ignored with a warning.
+# base: the default branch; init reads it from origin's HEAD.
+# Ticketing and chat belong to the project: a repo may carry its own `ticketing` / `chat` block
+# (same keys as under adapters). The top-level adapters are the default for repos without one; a
+# block with the same kind merges over the default, another kind starts from that tool's defaults.
+# A repo's own .orca-coordinator.yaml (at its root) wins over both.
+repos:
+  - name: api
+    path: ~/code/api
+    base: main
+    ticketing: {kind: jira, team: PAY, issueUrl: "https://acme.atlassian.net/browse/{id}"}
+    chat: {draftOnlyChannels: [payments-incidents]}
+  - {name: web, path: ~/code/web, base: main}  # uses the default adapters below
+
+github:
+  org: acme
+  reviewTeams: [acme/platform]               # review requests to these teams count as yours
+  skipRepos: [infra-gitops]                  # never reviewed
+  botReviewer: ""                            # e.g. copilot-pull-request-reviewer
+  requestBotReview: false                    # request that reviewer on every new PR
+
+adapters:                                    # ticketing / chat: the default for repos without their own block
+  ticketing:
+    kind: linear                             # linear | jira | github | none
+    via: cli                                 # cli (adapters/ticketing/<kind>.sh) | mcp:<tool> | script:<path>
+    team: ENG                                # team key (Linear) or project key (Jira)
+    todoStates: [Backlog, Todo, Triage]      # states that mean "not started"
+    childLabel: ""                           # label the coordinator puts on child tickets it creates
+    issueUrl: "https://linear.app/acme/issue/{id}"
+  chat:
+    kind: slack                              # slack | none
+    via: mcp:slack                           # the agent tool family used to read chat
+    mentionIds: []                           # your user id and team group id, to detect mentions
+    reviewChannels: []                       # channels where teammates ask for reviews
+    draftOnlyChannels: []                    # channels the bot cannot post in: draft and tell the human
+  flags:
+    kind: none                               # unleash | none
+    via: cli
+    baseUrl: ""                              # e.g. https://flags.example.com
+    project: default
+    uiUrl: ""                                # e.g. https://flags.example.com/projects/default/features/{flag}
+    secretRef: ""                             # keychain:<service> | env:<NAME> | file:<path>
+
+sensitive: [commit, push, pr-open, pr-merge, pr-comment, ticket-write, chat-post, db, deploy, prod, delete-branch, settings-allow-deny]
+queue: {max: 3, staleHours: 24}
+budget: {stateBytes: 2500, reportHead: 2500, workerRetries: 1, maxWorkersPerTrigger: 3}
+
+automations:
+  enabled: false                             # init registers the jobs below only when true (or --automations)
+  timezone: UTC
+  graceMinutes: 720
+  jobs:
+    - {playbook: pr-comments, schedule: "0 9-19 * * 1-5", precheck: pr-comments, name: "My PRs: draft replies and fixes to review comments"}
+    - {playbook: pr-review, schedule: "15 9,12,15,18 * * 1-5", precheck: pr-review, name: "Teammates' PRs: draft my review"}
+    - {playbook: ticket-triage, schedule: "30 9 * * 1-5", precheck: ticket-triage, name: "Tickets: triage new ones and plan"}
+    - {playbook: cleanup, schedule: "0 18 * * *", precheck: none, name: "Cleanup: close idle sessions, remove merged worktrees"}
+    - {playbook: eval-weekly, schedule: "0 9 * * 1", precheck: eval-weekly, name: "Coordinator: weekly self-evaluation"}
+    - {playbook: playbook-regression, schedule: "0 10 * * 1-5", precheck: playbook-regression, name: "Coordinator: playbook regression check"}
+
+board:
+  oncallLabel: oncall
+  repoColors: {}                             # optional {repo: "#hex"}; unset repos get a stable hash colour

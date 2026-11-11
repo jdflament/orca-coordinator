@@ -1,115 +1,285 @@
-// The panel <-> worker contract, declared once: src/panel.tsx and src/worker.ts both read it.
+// The panel <-> worker contract: board.json (schema/board.schema.json) plus what the
+// worker adds from Orca (live workers, coordinator liveness) and from panel.json.
 
-export interface BoardOption {
+interface BoardOption {
   id: string
   label: string
   recommended?: boolean
 }
 
-export interface BoardDecision {
-  id: string
+interface BoardDecision {
+  id: number | string
   title: string
+  repo?: string
+  url?: string
+  action: string
   context?: string
   options: BoardOption[]
-  status: string
+  status: 'pending' | 'answered' | string
   answer?: string
-  answeredAt?: string
-  createdAt?: string
+  oncall?: boolean
 }
 
-export interface BoardTask {
+interface BoardWorkstream {
   id: string
   title: string
-  status: string
-  kind?: string
-  assignee?: string
-  ws?: string
-  detail?: string
-}
-
-export interface BoardWorkstream {
-  id: string
-  title: string
+  url?: string
   status: string
   progress?: number | null
-  owner?: string
   notes?: string
+  oncall?: boolean
 }
 
-export interface BoardRepo {
+interface BoardTask {
+  id: string
+  ws?: string
+  repo?: string
+  branch?: string
+  status: 'local' | 'pr' | 'hold' | 'blocked' | 'merged' | string
+  pr?: number
+  url?: string
+  detail?: string
+  oncall?: boolean
+}
+
+interface BoardRepo {
   id: string
   name: string
   kind: string
+  repo?: string
   status: string
   detail?: string
   url?: string
+  oncall?: boolean
 }
 
-export interface BoardAgent {
+interface BoardAgent {
   id?: string
   name: string
+  repo?: string
   role?: string
-  state: string
+  state: 'idle' | 'working' | 'waiting' | 'stopped' | string
   detail?: string
-  updatedAt?: string
 }
 
-/** A standing instruction the user gave the coordinator. */
-export interface BoardInstruction {
+interface BoardInstruction {
   id: string
   text: string
-  to?: string
-  status: string
-  createdAt?: string
+  status: 'active' | 'done' | string
 }
 
 export interface Board {
   version: number
   focus?: string
   updatedAt?: string
+  instructions?: BoardInstruction[]
+  decisions?: BoardDecision[]
   workstreams?: BoardWorkstream[]
   tasks?: BoardTask[]
   repos?: BoardRepo[]
-  decisions?: BoardDecision[]
   agents?: BoardAgent[]
-  instructions?: BoardInstruction[]
   log?: { at: string; text: string }[]
 }
 
-/** What the worker answers and posts: the parsed board, or why it could not. */
-export interface BoardSnapshot {
-  board: Board | null
-  error: string
-  boardPath: string
+/** A live orchestration worker, read from Orca. */
+export interface LiveWorker {
+  dispatchId: string
+  title: string
+  status: 'working' | 'idle' | 'needs input'
+  terminal: string | null
+  needsInput: boolean
+  /** From the board agent that is the same work (see board.get), when there is one. */
+  repo?: string
+  detail?: string
+}
+
+/** Uncommitted or unpushed work in a configured repo, read from git (not from board.json). */
+export interface LocalWork {
+  repo: string
+  branch: string
+  changed: number
+  unpushed: number
+}
+
+/** What `board.get` answers: the board plus live data and panel.json settings. */
+export interface BoardView extends Board {
+  /** Live workers; a board agent for the same work (same id, else name = title) is merged in and left out of agents. */
+  workers: LiveWorker[]
+  /** Derived per configured repo; a row a board task already covers (same repo and branch) is left out. */
+  localWork: LocalWork[]
+  coordinatorLive: boolean
+  ticketUrl: string
+  /** A repo's own ticket URL template, where its ticketing differs from the default. */
+  ticketUrls: Record<string, string>
+  repoColors: Record<string, string>
+  oncallLabel: string
+  error?: string
+}
+
+/** An Orca workspace the coordinator can be set up in. */
+export interface SetupWorkspace {
+  path: string
+  name: string
+}
+
+/** An Orca repo or folder (`orca repo list`). */
+export interface SetupRepo {
+  /** Orca's repo id (empty when Orca gives none). */
+  id: string
+  path: string
+  name: string
+  folder: boolean
+}
+
+/** Adapter kinds the package ships (adapters/<kind>/<name>.sh), 'none' first. */
+export interface AdapterKinds {
+  ticketing: string[]
+  chat: string[]
+}
+
+/** What `setup.status` answers: whether a valid config exists, and the setup form's choices. */
+export interface SetupStatus {
+  configured: boolean
+  version: string
+  node: boolean
+  /** The default (first folder, else shortest path) comes first. */
+  workspaces: SetupWorkspace[]
+  /** Repos (not folders) the coordinator can watch. */
+  repos: SetupRepo[]
+  /** git config user.name, to prefill the name. */
+  personName: string
+  adapters: AdapterKinds
+}
+
+/** The setup form. Fields left out keep init's detection; repos: [] watches none. */
+export interface SetupOptions {
+  workspace: string
+  name?: string
+  repos?: string[]
+  ticketing?: string
+  chat?: string
+  /** Ticket URL template with {id}; needed when ticketing is not 'none'. */
+  issueUrl?: string
+}
+
+export interface ConfigJob {
+  playbook: string
+  schedule: string
+  name?: string
+  precheck?: string
+  enabled?: boolean
+  [key: string]: unknown
+}
+
+/** A repo's own ticketing tool (overrides adapters.ticketing for that repo). */
+export interface RepoTicketing {
+  kind?: string
+  issueUrl?: string
+  [key: string]: unknown
+}
+
+/** A repo's own chat tool (overrides adapters.chat for that repo). */
+export interface RepoChat {
+  kind?: string
+  [key: string]: unknown
+}
+
+export interface ConfigRepo {
+  name: string
+  path: string
+  base?: string
+  /** Absent: the default (adapters.ticketing). In a config.save patch, null goes back to the default. */
+  ticketing?: RepoTicketing | null
+  chat?: RepoChat | null
+  [key: string]: unknown
+}
+
+/** The part of the merged config (`coordinator.mjs config --json`) the panel reads and edits. */
+export interface CoordinatorSettings {
+  person: { name: string; language: string; tone: string; [key: string]: unknown }
+  paths: { package: string; workspace: string; state: string; [key: string]: unknown }
+  agents: { coordinator: { agent: string; [key: string]: unknown }; [key: string]: unknown }
+  repos: ConfigRepo[]
+  adapters: { ticketing: { kind: string; issueUrl?: string; [key: string]: unknown }; chat: { kind: string; [key: string]: unknown }; [key: string]: unknown }
+  queue: { max: number; staleHours: number }
+  automations: { enabled: boolean; jobs: ConfigJob[]; [key: string]: unknown }
+  [key: string]: unknown
+}
+
+/** What `config.read` answers. config is null when there is no config or it cannot be read. */
+export interface ConfigRead {
+  path: string
+  config: CoordinatorSettings | null
+  /** Validation problems (empty when valid). */
+  problems: string[]
+  adapters: AdapterKinds
+  /** Orca's git repositories (never its plain folders). */
+  repos: SetupRepo[]
+  /** config.yaml repos entries that are not git repositories: ignored, offered for removal. */
+  skippedRepos: ConfigRepo[]
+}
+
+/** What `config.save` takes: merged into config.yaml; objects merge, repos replace. Other keys (automations, queue, budget) are ignored. */
+export interface ConfigPatch {
+  person?: { name?: string; language?: string; tone?: string }
+  repos?: ConfigRepo[]
+  /**
+   * The repo paths the form showed as watched when it was opened. Given, the save applies only
+   * the form's additions and removals to config.yaml's current repos, so a form opened before
+   * someone else edited the file cannot put back an entry they removed.
+   */
+  reposLoaded?: string[]
+  adapters?: { ticketing?: { kind?: string; issueUrl?: string }; chat?: { kind?: string } }
+}
+
+/** counts: parsed from the summary line ("would …" in a dry run); absent when it does not match. */
+export interface CleanupResult {
+  summary: string
+  actions: string[]
+  dryRun: boolean
+  counts?: { released: number; removed: number; kept: number }
+}
+
+/** saved: config.yaml was written; ok: and render succeeded. */
+export interface ConfigSave {
+  ok: boolean
+  saved: boolean
+  errors: string[]
+  output?: string[]
 }
 
 declare module 'orca' {
   interface PluginRequests {
-    /** The board as the worker last read it from disk. */
-    'board.get': { output: BoardSnapshot }
-    /** Records a decision click by appending to inbox.jsonl beside the board. */
-    'decision.respond': {
-      input: { decisionId: string; optionId: string; note?: string }
-      output: { ok: boolean; at: string; optionLabel: string }
-    }
-    /** Queues a quick action: nudge (unblock a task), stop (an agent), … */
-    'command.send': {
-      input: { command: 'nudge' | 'stop' | string; target: string }
-      output: { ok: boolean; at: string }
-    }
-    /** Brings the coordinator's terminal to the front in Orca. */
-    'coordinator.focus': {
-      input: { terminal?: string }
-      output: { ok: boolean; terminal?: string; title?: string; error?: string }
-    }
-    /** Whether the coordinator's terminal is the tab on screen right now. */
-    'coordinator.visible': {
-      output: { ok: boolean; visible: boolean }
-    }
-  }
-  interface PluginPanelEvents {
-    /** Posted to every open panel whenever the board file changes. */
-    'board.changed': BoardSnapshot
+    'board.get': { output: BoardView }
+    /** Types text + Enter into the coordinator terminal, or queues it in inbox.jsonl when offline. */
+    'board.send': { input: { text: string }; output: { sent: boolean; queued: boolean } }
+    /** Runs <coordinatorDir>/bin/cleanup (dryRun: with -n, changing nothing) and returns its summary line and actions. */
+    'board.cleanup': { input: { dryRun?: boolean }; output: CleanupResult }
+    /**
+     * Orca's own Geist (renderer/assets/Geist-*.woff2), base64, in parts that fit the 64 KB panel
+     * message cap; parts: 0 when Orca has none (the panel keeps its system-font fallback).
+     */
+    'panel.font': { input: { part: number }; output: { family: string; data: string; parts: number } }
+    /**
+     * Shows a configured repo's changes natively: its workspace + Source Control (needs
+     * workspace:write), else `orca file open-changed --mode diff`. Rejects an unknown repo.
+     */
+    'work.openChanges': { input: { repo: string }; output: { opened: boolean; via: 'source-control' | 'cli' } }
+    /** Opens Orca's Workspace Board (commands.run workspace.openBoard). */
+    'agents.openBoard': { output: { opened: boolean; error?: string } }
+    /** Brings a terminal to the front (the coordinator's when none is given). */
+    'board.switch': { input: { terminal?: string }; output: { switched: boolean } }
+    'setup.status': { output: SetupStatus }
+    /** Checks the form, copies the package to its stable home and runs init with the answers. */
+    'setup.run': { input: SetupOptions; output: { ok: boolean; output: string } }
+    /** Starts the coordinator agent in the configured workspace, in a terminal, focused. */
+    'setup.start': { output: { started: boolean; output: string } }
+    /** The user's config.yaml, merged with defaults, plus its problems and the choices. */
+    'config.read': { output: ConfigRead }
+    /** Removes one repos entry that is not a git repository from config.yaml (read back to check), then renders. */
+    'config.removeRepo': { input: { path: string }; output: ConfigSave }
+    /** Merges person/repos/adapters into config.yaml through `coordinator.mjs config --merge` (validated), then runs render. Never automations. */
+    'config.save': { input: { patch: ConfigPatch }; output: ConfigSave }
   }
 }
 

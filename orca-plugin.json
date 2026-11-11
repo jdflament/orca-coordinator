@@ -1,0 +1,47 @@
+{
+  "manifestVersion": 2,
+  "id": "coordinator-board",
+  "name": "Coordinator board",
+  "version": "1.0.0",
+  "description": "Your coordinator agent in Orca: one click sets it up, then the board shows what needs you, work by ticket and running workers.",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "plugin/src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "coordinator-board",
+        "title": "Coordinator board",
+        "icon": "bot",
+        "entry": "plugin/panel/index.html"
+      }
+    ],
+    "settings": [
+      {
+        "key": "coordinatorDir",
+        "title": "Coordinator state folder",
+        "description": "Absolute path (~/ allowed) of the orca-coordinator state folder: board.json, coordinator-terminal, bin/cleanup, panel.json.",
+        "type": "string",
+        "default": "~/.local/state/orca-coordinator"
+      },
+      {
+        "key": "orcaBin",
+        "title": "Orca CLI",
+        "description": "Path of the orca CLI the worker runs. Empty = the app's bundled CLI on macOS, else `orca` on PATH.",
+        "type": "string",
+        "default": ""
+      }
+    ]
+  },
+  "capabilities": [
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "workspace:write"
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+# Tests on every push and pull request.
+# Not run here: `orca plugin test .` (plugin/src/worker.test.ts) and `orca plugin validate .` need
+# the Orca app's CLI, which CI does not have; run `npm run check` locally before a release.
+# The typecheck uses the Orca plugin typings vendored in types/orca-plugin (a snapshot of what
+# `orca plugin types .` generates); refresh them with `npm run types` after an Orca update.
+name: test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - run: npm test
+
+      - name: Typecheck (vendored Orca plugin typings)
+        run: npm run typecheck

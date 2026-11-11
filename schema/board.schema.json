@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "board.schema.json",
+  "title": "Coordinator board",
+  "description": "The file the Orca panel reads and bin/board.mjs writes. Version 2.",
+  "type": "object",
+  "required": ["version", "updatedAt", "decisions", "workstreams", "tasks", "repos", "agents", "log"],
+  "properties": {
+    "version": { "const": 2 },
+    "focus": { "type": "string", "description": "One line: what the coordinator is on right now." },
+    "updatedAt": { "type": "string", "description": "ISO timestamp, bumped on every write." },
+    "seq": { "type": "object", "description": "Id counters (decision, instruction).", "additionalProperties": { "type": "integer" } },
+    "instructions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "text": { "type": "string" },
+          "status": { "enum": ["active", "done"] },
+          "createdAt": { "type": "string" },
+          "doneAt": { "type": "string" }
+        }
+      }
+    },
+    "decisions": {
+      "type": "array",
+      "description": "Everything that waits on the human. The panel's 'Needs you' section.",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "action", "options", "status"],
+        "properties": {
+          "id": { "type": ["integer", "string"] },
+          "title": { "type": "string", "description": "Usually the ticket id." },
+          "repo": { "type": "string" },
+          "url": { "type": "string" },
+          "action": { "type": "string", "description": "What the human must do: Merge, Get review, Create flag, Decide, Run SQL…" },
+          "context": { "type": "string", "description": "One or two lines: what and why." },
+          "options": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": ["id", "label"],
+              "properties": {
+                "id": { "type": "string", "description": "Sent to the coordinator as '<id> <decision id>'." },
+                "label": { "type": "string", "description": "Button text, imperative (Merge, Skip, Explain)." },
+                "recommended": { "type": "boolean" }
+              }
+            }
+          },
+          "status": { "enum": ["pending", "answered"] },
+          "answer": { "type": "string" },
+          "oncall": { "type": "boolean" },
+          "createdAt": { "type": "string" },
+          "answeredAt": { "type": "string" }
+        }
+      }
+    },
+    "workstreams": {
+      "type": "array",
+      "description": "Parent tickets or features. Tasks point at them with `ws`.",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "title": { "type": "string" },
+          "url": { "type": "string" },
+          "status": { "enum": ["planned", "ready", "active", "paused", "done"] },
+          "progress": { "type": ["integer", "null"], "description": "0-100, or null = merged tasks / all tasks." },
+          "notes": { "type": "string", "description": "The blocker or next step, one line." },
+          "oncall": { "type": "boolean" }
+        }
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "description": "Tickets, one per repo per feature.",
+      "items": {
+        "type": "object",
+        "required": ["id", "status"],
+        "properties": {
+          "id": { "type": "string", "description": "The ticket id." },
+          "ws": { "type": "string", "description": "Workstream id." },
+          "repo": { "type": "string" },
+          "status": { "enum": ["local", "pr", "hold", "blocked", "merged"] },
+          "pr": { "type": "integer" },
+          "url": { "type": "string" },
+          "detail": { "type": "string", "description": "The next step, one line." },
+          "oncall": { "type": "boolean" },
+          "mergedAt": { "type": "string" }
+        }
+      }
+    },
+    "repos": {
+      "type": "array",
+      "description": "Other PRs and repos worth watching, outside the workstreams.",
+      "items": {
+        "type": "object",
+        "required": ["id", "name", "kind", "status"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string", "description": "'#<pr>' for a PR." },
+          "kind": { "enum": ["repo", "pr", "feature"] },
+          "repo": { "type": "string" },
+          "status": { "enum": ["planned", "building", "review", "hold", "blocked", "merged", "shipped"] },
+          "detail": { "type": "string" },
+          "url": { "type": "string" },
+          "oncall": { "type": "boolean" }
+        }
+      }
+    },
+    "agents": {
+      "type": "array",
+      "description": "Workers the coordinator knows about. Live Orca workers are added by the panel's worker, not written here.",
+      "items": {
+        "type": "object",
+        "required": ["name", "state"],
+        "properties": {
+          "id": { "type": "string", "description": "Dispatch id when known." },
+          "name": { "type": "string" },
+          "repo": { "type": "string" },
+          "role": { "type": "string" },
+          "state": { "enum": ["idle", "working", "waiting", "stopped"] },
+          "detail": { "type": "string" },
+          "updatedAt": { "type": "string" }
+        }
+      }
+    },
+    "log": {
+      "type": "array",
+      "maxItems": 20,
+      "items": {
+        "type": "object",
+        "required": ["at", "text"],
+        "properties": { "at": { "type": "string" }, "text": { "type": "string" } }
+      }
+    }
+  }
+}

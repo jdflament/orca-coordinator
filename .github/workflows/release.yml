@@ -1,0 +1,37 @@
+# Release on a version tag. Orca installs the newest vX.Y.Z tag of this repository
+# (`orca plugin install jdflament/orca-coordinator`) and `orca plugin update` moves to the next
+# one, so the tag is the release; this job checks it and writes the GitHub release notes.
+#   1. bump "version" in package.json and orca-plugin.json (the test checks they match)
+#   2. git commit -am "v1.2.0" && git tag -a v1.2.0 -m v1.2.0 && git push --follow-tags
+name: release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create the release
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Tag matches package.json and orca-plugin.json
+        run: |
+          for file in package.json orca-plugin.json; do
+            want="v$(node -p "require('./$file').version")"
+            [ "$GITHUB_REF_NAME" = "$want" ] || { echo "tag $GITHUB_REF_NAME but $file says $want"; exit 1; }
+          done
+
+      - run: npm test
+
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
