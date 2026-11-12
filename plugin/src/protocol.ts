@@ -1,6 +1,12 @@
 // The panel <-> worker contract: board.json (schema/board.schema.json) plus what the
 // worker adds from Orca (live workers, coordinator liveness) and from panel.json.
 
+/** A link's known host, only to pick an icon and a label; absent for any other host (a plain link). */
+export interface LinkHost {
+  name: string
+  kind: 'ticket' | 'code' | 'chat' | 'doc'
+}
+
 interface BoardOption {
   id: string
   label: string
@@ -18,6 +24,8 @@ interface BoardDecision {
   status: 'pending' | 'answered' | string
   answer?: string
   oncall?: boolean
+  /** Added by board.get from url. */
+  linkHost?: LinkHost
 }
 
 interface BoardWorkstream {
@@ -28,6 +36,8 @@ interface BoardWorkstream {
   progress?: number | null
   notes?: string
   oncall?: boolean
+  /** Added by board.get from url. */
+  linkHost?: LinkHost
 }
 
 interface BoardTask {
@@ -40,6 +50,8 @@ interface BoardTask {
   url?: string
   detail?: string
   oncall?: boolean
+  /** Added by board.get from url. */
+  linkHost?: LinkHost
 }
 
 interface BoardRepo {
@@ -51,6 +63,8 @@ interface BoardRepo {
   detail?: string
   url?: string
   oncall?: boolean
+  /** Added by board.get from url. */
+  linkHost?: LinkHost
 }
 
 interface BoardAgent {
@@ -108,12 +122,8 @@ export interface BoardView extends Board {
   /** Derived per configured repo; a row a board task already covers (same repo and branch) is left out. */
   localWork: LocalWork[]
   coordinatorLive: boolean
-  ticketUrl: string
-  /** A repo's own ticket URL template, where its ticketing differs from the default. */
-  ticketUrls: Record<string, string>
   repoColors: Record<string, string>
   oncallLabel: string
-  error?: string
 }
 
 /** An Orca workspace the coordinator can be set up in. */
@@ -131,12 +141,6 @@ export interface SetupRepo {
   folder: boolean
 }
 
-/** Adapter kinds the package ships (adapters/<kind>/<name>.sh), 'none' first. */
-export interface AdapterKinds {
-  ticketing: string[]
-  chat: string[]
-}
-
 /** What `setup.status` answers: whether a valid config exists, and the setup form's choices. */
 export interface SetupStatus {
   configured: boolean
@@ -148,7 +152,6 @@ export interface SetupStatus {
   repos: SetupRepo[]
   /** git config user.name, to prefill the name. */
   personName: string
-  adapters: AdapterKinds
 }
 
 /** The setup form. Fields left out keep init's detection; repos: [] watches none. */
@@ -156,41 +159,13 @@ export interface SetupOptions {
   workspace: string
   name?: string
   repos?: string[]
-  ticketing?: string
-  chat?: string
-  /** Ticket URL template with {id}; needed when ticketing is not 'none'. */
-  issueUrl?: string
-}
-
-export interface ConfigJob {
-  playbook: string
-  schedule: string
-  name?: string
-  precheck?: string
-  enabled?: boolean
-  [key: string]: unknown
-}
-
-/** A repo's own ticketing tool (overrides adapters.ticketing for that repo). */
-export interface RepoTicketing {
-  kind?: string
-  issueUrl?: string
-  [key: string]: unknown
-}
-
-/** A repo's own chat tool (overrides adapters.chat for that repo). */
-export interface RepoChat {
-  kind?: string
-  [key: string]: unknown
 }
 
 export interface ConfigRepo {
   name: string
   path: string
   base?: string
-  /** Absent: the default (adapters.ticketing). In a config.save patch, null goes back to the default. */
-  ticketing?: RepoTicketing | null
-  chat?: RepoChat | null
+  /** ticketing / chat blocks (advanced, config.yaml-only, for shell prechecks and adapters/*.sh) pass through untouched. */
   [key: string]: unknown
 }
 
@@ -200,9 +175,7 @@ export interface CoordinatorSettings {
   paths: { package: string; workspace: string; state: string; [key: string]: unknown }
   agents: { coordinator: { agent: string; [key: string]: unknown }; [key: string]: unknown }
   repos: ConfigRepo[]
-  adapters: { ticketing: { kind: string; issueUrl?: string; [key: string]: unknown }; chat: { kind: string; [key: string]: unknown }; [key: string]: unknown }
-  queue: { max: number; staleHours: number }
-  automations: { enabled: boolean; jobs: ConfigJob[]; [key: string]: unknown }
+  /** Everything else (adapters, queue, budget, automations…) is config.yaml-only: the panel never reads or edits it. */
   [key: string]: unknown
 }
 
@@ -212,14 +185,13 @@ export interface ConfigRead {
   config: CoordinatorSettings | null
   /** Validation problems (empty when valid). */
   problems: string[]
-  adapters: AdapterKinds
   /** Orca's git repositories (never its plain folders). */
   repos: SetupRepo[]
   /** config.yaml repos entries that are not git repositories: ignored, offered for removal. */
   skippedRepos: ConfigRepo[]
 }
 
-/** What `config.save` takes: merged into config.yaml; objects merge, repos replace. Other keys (automations, queue, budget) are ignored. */
+/** What `config.save` takes: merged into config.yaml; objects merge, repos replace. Other keys (adapters, automations, queue, budget) and a repo's ticketing / chat are ignored. */
 export interface ConfigPatch {
   person?: { name?: string; language?: string; tone?: string }
   repos?: ConfigRepo[]
@@ -229,7 +201,6 @@ export interface ConfigPatch {
    * someone else edited the file cannot put back an entry they removed.
    */
   reposLoaded?: string[]
-  adapters?: { ticketing?: { kind?: string; issueUrl?: string }; chat?: { kind?: string } }
 }
 
 /** counts: parsed from the summary line ("would …" in a dry run); absent when it does not match. */
@@ -278,7 +249,7 @@ declare module 'orca' {
     'config.read': { output: ConfigRead }
     /** Removes one repos entry that is not a git repository from config.yaml (read back to check), then renders. */
     'config.removeRepo': { input: { path: string }; output: ConfigSave }
-    /** Merges person/repos/adapters into config.yaml through `coordinator.mjs config --merge` (validated), then runs render. Never automations. */
+    /** Merges person/repos into config.yaml through `coordinator.mjs config --merge` (validated), then runs render. Never automations. */
     'config.save': { input: { patch: ConfigPatch }; output: ConfigSave }
   }
 }

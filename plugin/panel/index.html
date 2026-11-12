@@ -73,6 +73,9 @@
       h2 .count { font-weight: 400; text-transform: none; letter-spacing: 0; color: color-mix(in srgb, var(--muted) 60%, transparent); }
       section:empty { display: none; }
       a { color: inherit; cursor: pointer; text-decoration: none; }
+      a .host { display: inline-flex; vertical-align: -2px; margin-right: 4px; color: var(--muted); }
+      a .host svg { width: 12px; height: 12px; }
+
       a:hover { text-decoration: underline; }
       .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; opacity: 0.6; }
       .dot.live { background: var(--green); opacity: 1; }
@@ -139,19 +142,14 @@
       .field.top { align-items: start; }
       .field.top > span { padding-top: 4px; }
       .checks { display: flex; flex-direction: column; min-width: 0; }
-      .repo-row { display: flex; flex-direction: column; min-width: 0; }
-      .repo-row > .check { flex: 1; }
-      .repo-row details > summary { margin: 0 0 0 22px; padding: 2px 4px; }
-      .repo-tools { display: flex; flex-direction: column; gap: 8px; padding: 6px 0 8px 22px; }
       .check { display: flex; align-items: center; gap: 8px; min-height: 24px; min-width: 0; padding: 0 4px; margin: 0 -4px; border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap; }
       .check:hover { background: var(--hover); }
       .check .trunc { flex: 0 1 auto; }
       .check .muted { font-size: 11px; color: color-mix(in srgb, var(--muted) 70%, transparent); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }
-      input[type=text], input[type=number], select { font: inherit; font-size: 12px; height: 28px; box-sizing: border-box; min-width: 0; width: 100%; padding: 0 8px; border-radius: var(--radius-md); border: 1px solid var(--input); background: transparent; color: var(--fg); outline: none; transition: box-shadow 0.15s, border-color 0.15s; }
-      html:not(.light) input[type=text], html:not(.light) input[type=number], html:not(.light) select { background: color-mix(in srgb, var(--input) 30%, transparent); }
+      input[type=text], select { font: inherit; font-size: 12px; height: 28px; box-sizing: border-box; min-width: 0; width: 100%; padding: 0 8px; border-radius: var(--radius-md); border: 1px solid var(--input); background: transparent; color: var(--fg); outline: none; transition: box-shadow 0.15s, border-color 0.15s; }
+      html:not(.light) input[type=text], html:not(.light) select { background: color-mix(in srgb, var(--input) 30%, transparent); }
       select { padding: 0 4px; }
       select option { background: var(--surface); color: var(--fg); }
-      input[type=number] { width: 80px; }
       input:focus-visible, select:focus-visible { box-shadow: var(--focus); border-color: var(--ring); }
       input[type=checkbox] { width: 14px; height: 14px; margin: 0; accent-color: var(--primary); flex: none; }
       input:disabled, select:disabled { opacity: 0.5; }
@@ -187,8 +185,6 @@
     <script>
       const PALETTE = ['#8957e5', '#bf8700', '#0e8a8a', '#2f6fbf', '#1f883d', '#c2410c', '#b03a8f', '#5a6b2f']
       let repoColors = {}
-      let ticketUrl = ''
-      let ticketUrls = {}
       let oncallLabel = 'oncall'
       const repoColor = (repo) => repoColors[repo] || PALETTE[[...text(repo)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 9973, 7) % PALETTE.length]
       const STATE_COLORS = { pr: 'blue', review: 'blue', working: 'blue', running: 'blue', active: 'blue', hold: 'amber', waiting: 'amber', merged: 'green', done: 'green', succeeded: 'green', failed: 'danger', local: 'amber', blocked: 'danger', 'needs-input': 'danger', 'needs input': 'danger', idle: 'muted' }
@@ -197,6 +193,11 @@
         more: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>',
         terminal: '<svg viewBox="0 0 24 24"><path d="M12 19h8"/><path d="m4 17 6-6-6-6"/></svg>',
         stop: '<svg viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/></svg>',
+        // Link hosts (Lucide ticket, git-pull-request, message-square, file-text): only for hosts the worker recognised.
+        ticket: '<svg viewBox="0 0 24 24"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/></svg>',
+        code: '<svg viewBox="0 0 24 24"><circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 0 1 2 2v7"/><line x1="6" x2="6" y1="9" y2="21"/></svg>',
+        chat: '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
+        doc: '<svg viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>',
         retry: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>',
         gear: '<svg viewBox="0 0 24 24"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>'
       }
@@ -220,9 +221,18 @@
         return node
       }
 
-      function link(label, url, className) {
+      // A link opens its own url. host (board.get's linkHost) only adds an icon and a label; an unknown host stays a plain link.
+      function link(label, url, className, host) {
         const node = el('a', className, label)
-        if (typeof url === 'string' && url) node.onclick = () => orca.shell?.openExternal(url)
+        if (typeof url !== 'string' || !url) return node
+        node.onclick = () => orca.shell?.openExternal(url)
+        node.title = url
+        if (host && ICONS[host.kind]) {
+          const icon = el('span', 'host')
+          icon.innerHTML = ICONS[host.kind]
+          node.prepend(icon)
+          node.title = 'Open in ' + text(host.name) + ': ' + url
+        }
         return node
       }
 
@@ -258,8 +268,8 @@
       }
 
       // One list row, one line: cells in order; a 'grow' cell takes the free width and truncates.
-      function row(cells, className) {
-        const node = el('div', className ? 'row ' + className : 'row')
+      function row(cells) {
+        const node = el('div', 'row')
         node.append(...cells)
         return node
       }
@@ -273,7 +283,6 @@
         return [heading, ...nodes]
       }
 
-      // Recent: relative; past 24 h: a short date ("Nov 11", with the year when it is not this year).
       // A section heading that opens Orca's own view of the same things.
       function linkHeading(nodes, title, onClick) {
         if (nodes[0]) { nodes[0].classList.add('link'); nodes[0].title = title; nodes[0].onclick = onClick }
@@ -285,6 +294,7 @@
         if (!result?.opened) showResult('Could not open the Workspace Board: ' + text(result?.error), [], true)
       }
 
+      // Recent: relative; past 24 h: a short date ("Nov 11", with the year when it is not this year).
       function getAgo(iso) {
         const date = new Date(iso)
         if (Number.isNaN(date.getTime())) return 'unknown'
@@ -332,7 +342,7 @@
         const answered = decision.status === 'answered'
         const card = el('div', 'item')
         const top = el('div', 'top')
-        top.append(repoLabel(decision.repo), link(decision.title || decision.id, decision.url, 'trunc grow'), ...oncallBadge(decision), el('span', 'verb', decision.action))
+        top.append(repoLabel(decision.repo), link(decision.title || decision.id, decision.url, 'trunc grow', decision.linkHost), ...oncallBadge(decision), el('span', 'verb', decision.action))
         const actions = el('div', 'actions')
         const sent = (decisionLockedUntil.get(decision.id) ?? 0) > Date.now()
         const sentNote = el('span', 'muted', 'sent')
@@ -380,9 +390,9 @@
 
       function renderWorkRow(item) {
         const nudge = item.status === 'blocked' ? iconButton('retry', 'Nudge ' + item.id, () => sendText('nudge ' + item.id)) : null
-        const pr = item.pr ? [link('#' + item.pr, item.url, 'pr')] : []
-        const url = Object.hasOwn(ticketUrls, text(item.repo)) ? text(ticketUrls[item.repo]) : ticketUrl
-        const id = link(item.id, url ? url.replace('{id}', item.id) : item.pr ? '' : item.url, 'trunc')
+        // The item's own url (the coordinator writes it from the tool it used): the PR's when there is one, else the ticket's.
+        const pr = item.pr ? [link('#' + item.pr, item.url, 'pr', item.linkHost)] : []
+        const id = item.pr ? link(item.id, '', 'trunc') : link(item.id, item.url, 'trunc', item.linkHost)
         id.style.flex = '0 1 auto'
         const node = el('div', 'wk')
         node.append(repoLabel(item.repo), id, ...pr, ...oncallBadge(item), el('span', 'meta-text trunc grow', item.detail), item.status === 'pr' ? el('span') : state(item.status), ...(nudge ? [nudge] : []))
@@ -406,7 +416,7 @@
         bar.title = progress + '%'
         bar.append(el('i'))
         bar.firstChild.style.width = progress + '%'
-        const title = link(ws.title, ws.url, 'trunc')
+        const title = link(ws.title, ws.url, 'trunc', ws.linkHost)
         title.style.flex = '0 1 auto'
         node.append(title, ...oncallBadge(ws), el('span', 'note trunc grow', ws.notes), bar)
         return node
@@ -426,8 +436,8 @@
       function renderRepoWork(board) {
         return list(board.localWork).map((work) => {
           const counts = [work.changed ? work.changed + ' changed' : '', work.unpushed ? work.unpushed + ' unpushed' : ''].filter(Boolean).join(' · ')
-          const node = row([repoLabel(work.repo), el('span', 'trunc grow', work.branch), el('span', 'meta-text fixed', counts)], 'wrow')
-          node.classList.remove('row')
+          const node = el('div', 'wrow')
+          node.append(repoLabel(work.repo), el('span', 'trunc grow', work.branch), el('span', 'meta-text fixed', counts))
           node.title = 'Open ' + work.repo + ' changes in Source Control'
           node.onclick = () => orca.plugin.request('work.openChanges', { repo: work.repo }).catch((error) => showResult('Could not open ' + work.repo + ': ' + error.message, [], true))
           return node
@@ -446,19 +456,12 @@
         return [...fromBoard, ...workers.map(renderWorkerRow)]
       }
 
-      // A board agent set with --id <dispatchId> is the same Orca worker as a live worker-list row: show it once.
-      // board.get already merged each board agent into its live worker (same id, else name = title).
-      function getBoardAgents(board) {
-        return list(board.agents)
-      }
-
       function render(board) {
         repoColors = board.repoColors && typeof board.repoColors === 'object' ? board.repoColors : {}
-        ticketUrl = text(board.ticketUrl)
-        ticketUrls = board.ticketUrls && typeof board.ticketUrls === 'object' ? board.ticketUrls : {}
         oncallLabel = text(board.oncallLabel) || 'oncall'
+        // board.get already merged each board agent into its live worker (same id, else name = title).
         const workers = list(board.workers)
-        const agents = getBoardAgents(board, workers)
+        const agents = list(board.agents)
         const busy = agents.filter((a) => a.state === 'working').length + workers.length
         byId('start').hidden = board.coordinatorLive === true
         byId('open').hidden = board.coordinatorLive !== true
@@ -604,47 +607,6 @@
 
       const inside = (child, root) => child === root || child.startsWith(root + '/')
 
-      // Ticketing + its URL template (needed when a ticketing tool is picked), and chat.
-      function toolFields(kinds, ticketing, issueUrl, chat) {
-        const ticket = select(list(kinds?.ticketing).length ? kinds.ticketing : ['none'], ticketing || 'none')
-        const url = input(issueUrl)
-        url.placeholder = 'https://…/issue/{id}'
-        const urlField = field('Ticket URL', url)
-        const sync = () => { urlField.hidden = ticket.value === 'none' }
-        ticket.onchange = sync
-        sync()
-        const chatSelect = select(list(kinds?.chat).length ? kinds.chat : ['none'], chat || 'none')
-        return { nodes: [field('Ticketing', ticket), urlField, field('Chat', chatSelect)], ticket, url, chat: chatSelect }
-      }
-
-      const titleCase = (value) => (value ? value[0].toUpperCase() + value.slice(1) : '')
-
-      // A repository's own ticketing and chat: "Default" uses the default block; the summary reads like "Linear · Slack" or "Default".
-      function repoToolFields(kinds, entry) {
-        const own = { touched: false, onChange: null }
-        const options = (names) => [{ value: '', label: 'Default' }, ...(list(names).length ? names : ['none']).map((kind) => ({ value: kind, label: titleCase(kind) }))]
-        const ticket = select(options(kinds?.ticketing), entry.ticketing?.kind ?? '')
-        const url = input(entry.ticketing?.issueUrl)
-        url.placeholder = 'https://…/issue/{id}'
-        const urlField = field('Ticket URL', url)
-        const chat = select(options(kinds?.chat), entry.chat?.kind ?? '')
-        const sync = () => { urlField.hidden = ticket.value === '' || ticket.value === 'none' }
-        const changed = () => { own.touched = true; sync(); own.onChange?.() }
-        ticket.onchange = changed
-        url.oninput = changed
-        chat.onchange = changed
-        sync()
-        own.node = el('div', 'repo-tools')
-        own.node.append(field('Ticketing', ticket), urlField, field('Chat', chat))
-        own.summary = () => (ticket.value === '' && chat.value === '' ? 'Default' : (titleCase(ticket.value) || 'Default') + ' · ' + (titleCase(chat.value) || 'Default'))
-        // Keeps the block's other keys (team, states, channels) when the tool stays the same.
-        own.value = () => ({
-          ticketing: ticket.value === '' ? null : { ...(entry.ticketing?.kind === ticket.value ? entry.ticketing : {}), kind: ticket.value, issueUrl: ticket.value === 'none' ? '' : url.value.trim() },
-          chat: chat.value === '' ? null : { ...(entry.chat?.kind === chat.value ? entry.chat : {}), kind: chat.value }
-        })
-        return own
-      }
-
       // Orca's UI font (Geist) is not shared with plugin panels: the worker reads Orca's own file and
       // hands it over in parts (panel messages are capped at 64 KB); without it the system font stays.
       async function loadFont() {
@@ -688,7 +650,6 @@
           return { repo, box: item.box }
         })
         if (repos.length === 0) checks.append(el('span', 'muted', 'No repositories in Orca yet'))
-        const tools = toolFields(status.adapters, 'none', '', 'none')
         form.append(go)
         if (workspaces.length > 1) {
           const change = el('label', 'change')
@@ -701,7 +662,7 @@
           change.append(el('span', '', 'Change folder'), picker)
           form.append(change)
         }
-        form.append(field('Your name', name), field('Repositories', checks, true), el('div', 'helper', 'The coordinator can start workers in the checked repositories.'), ...tools.nodes)
+        form.append(field('Your name', name), field('Repositories', checks, true), el('div', 'helper', 'The coordinator can start workers in the checked repositories.'))
         nodes.push(form, errors)
         byId('setup').replaceChildren(...nodes)
         byId('setup').querySelectorAll('button, input, select').forEach((node) => { node.disabled = !status.node })
@@ -715,10 +676,7 @@
           const options = {
             workspace: workspace.path,
             name: name.value.trim(),
-            repos: boxes.filter(({ box }) => box.checked).map(({ repo }) => repo.path),
-            ticketing: tools.ticket.value,
-            chat: tools.chat.value,
-            issueUrl: tools.ticket.value === 'none' ? '' : tools.url.value.trim()
+            repos: boxes.filter(({ box }) => box.checked).map(({ repo }) => repo.path)
           }
           try {
             const result = await orca.plugin.request('setup.run', options)
@@ -788,23 +746,12 @@
         const configured = list(config.repos)
         const known = new Set(configured.map((repo) => text(repo.path)))
         const offered = [...configured.map((repo) => ({ entry: repo, checked: true })), ...list(read.repos).filter((repo) => !known.has(repo.path)).map((repo) => ({ entry: { name: repo.name, path: repo.path, base: 'main' }, checked: false }))]
-        const adapters = config.adapters || {}
-        const tools = toolFields(read.adapters, adapters.ticketing?.kind, adapters.ticketing?.issueUrl, adapters.chat?.kind)
-
-        // Ticketing and chat belong to the project: each repository may use its own, collapsed under its row.
         const repoChecks = el('div', 'checks')
         const repoBoxes = offered.map(({ entry, checked }) => {
-          const row = el('div', 'repo-row')
           const item = checkbox(text(entry.name), checked, text(entry.path))
           item.node.title = text(entry.path)
-          const own = repoToolFields(read.adapters, entry)
-          const fold = el('details')
-          const summary = el('summary', '', own.summary())
-          fold.append(summary, own.node)
-          own.onChange = () => { summary.textContent = own.summary() }
-          row.append(item.node, fold)
-          repoChecks.append(row)
-          return { entry, box: item.box, own }
+          repoChecks.append(item.node)
+          return { entry, box: item.box }
         })
         if (offered.length === 0) repoChecks.append(el('span', 'muted', 'No repositories in Orca yet'))
         const reposLoaded = configured.map((repo) => text(repo.path))
@@ -833,8 +780,7 @@
           el('h2', '', 'Settings'),
           el('div', 'path', read.path),
           ...form('You', field('Name', name), field('Language', language), field('Tone', tone)),
-          ...form('Repositories', el('div', 'helper', 'The coordinator can start workers in these repositories. Each one can use its own ticketing and chat tool.'), ...skipped, repoChecks),
-          ...form('Default for other repositories', el('div', 'helper', 'Ticketing and chat for every repository set to Default.'), ...tools.nodes),
+          ...form('Repositories', el('div', 'helper', 'The coordinator can start workers in these repositories.'), ...skipped, repoChecks),
           errors,
           actions
         )
@@ -856,24 +802,18 @@
         async function saveSettings() {
           // Repos only when the selection changed, as additions and removals against what was loaded:
           // a form opened before config.yaml changed cannot put back a removed entry.
-          // A repo's ticketing / chat is sent only when edited here (null = back to the default): other repos keep their own blocks.
-          const checked = repoBoxes.filter(({ box }) => box.checked)
-          const checkedRepos = checked.map(({ entry, own }) => {
+          // A repo's ticketing / chat blocks (config.yaml-only) are never sent: the worker keeps them as config.yaml has them.
+          const checkedRepos = repoBoxes.filter(({ box }) => box.checked).map(({ entry }) => {
             const { ticketing, chat, ...rest } = entry
-            return own.touched ? { ...rest, ...own.value() } : rest
+            return rest
           })
-          const reposChanged = checked.some(({ own }) => own.touched) || checkedRepos.length !== reposLoaded.length || checkedRepos.some((entry) => !reposLoaded.includes(text(entry.path)))
+          const reposChanged = checkedRepos.length !== reposLoaded.length || checkedRepos.some((entry) => !reposLoaded.includes(text(entry.path)))
           const patch = {
             person: { name: name.value.trim(), language: language.value, tone: tone.value.trim() },
-            ...(reposChanged ? { repos: checkedRepos, reposLoaded } : {}),
-            adapters: { ticketing: { kind: tools.ticket.value, issueUrl: tools.url.value.trim() }, chat: { kind: tools.chat.value } }
+            ...(reposChanged ? { repos: checkedRepos, reposLoaded } : {})
           }
           const local = []
           if (!patch.person.name) local.push('Name is empty')
-          if (patch.adapters.ticketing.kind !== 'none' && !patch.adapters.ticketing.issueUrl.includes('{id}')) local.push('The ticket URL template needs {id}')
-          for (const repo of checkedRepos) {
-            if (repo.ticketing && repo.ticketing.kind !== 'none' && !text(repo.ticketing.issueUrl).includes('{id}')) local.push(text(repo.name) + ': the ticket URL template needs {id}')
-          }
           if (local.length) return showErrors(errors, local)
           view.querySelectorAll('button, input, select').forEach((node) => { node.disabled = true })
           showErrors(errors, [])

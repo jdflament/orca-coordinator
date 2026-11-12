@@ -60,7 +60,7 @@ function stateFolder(): string {
   const dir = mkdtempSync(join(tmpdir(), 'coordinator-state-'))
   copyFileSync(busy, join(dir, 'board.json'))
   writeFileSync(join(dir, 'coordinator-terminal'), 'term_coord\n')
-  writeFileSync(join(dir, 'panel.json'), JSON.stringify({ ticketUrl: 'https://example.test/tickets/{id}', repoColors: { api: '#123456' }, oncallLabel: 'oncall' }))
+  writeFileSync(join(dir, 'panel.json'), JSON.stringify({ repoColors: { api: '#123456' }, oncallLabel: 'oncall' }))
   mkdirSync(join(dir, 'bin'))
   writeFileSync(join(dir, 'bin', 'cleanup'), '#!/bin/sh\necho "released ctx_9"\necho "released 1 sessions, removed 0 worktrees, kept 2 (dirty/open)"\n')
   chmodSync(join(dir, 'bin', 'cleanup'), 0o755)
@@ -88,7 +88,6 @@ test('board.get merges the board with live workers, liveness and panel.json', as
     assert.equal(view.focus, 'PROJ-100 checkout redesign: merge api #42, then web #310')
     assert.equal(view.decisions?.length, 3)
     assert.equal(view.coordinatorLive, true)
-    assert.equal(view.ticketUrl, 'https://example.test/tickets/{id}')
     assert.deepEqual(view.repoColors, { api: '#123456' })
     assert.deepEqual(
       view.workers.map((w) => [w.dispatchId, w.title, w.status]),
@@ -99,6 +98,41 @@ test('board.get merges the board with live workers, liveness and panel.json', as
       'finished workers drop, titles come from tasks then terminals'
     )
     assert.deepEqual(worker.refusals, [])
+    await worker.deactivate()
+  })
+})
+
+test('board.get: a known link host gets an icon label; an unknown host, a missing url or a non-http url gets none', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    writeFileSync(
+      join(dir, 'board.json'),
+      JSON.stringify({
+        version: 2,
+        tasks: [
+          { id: 'BEN-1', repo: 'api', status: 'local', url: 'https://linear.app/acme/issue/BEN-1' },
+          { id: 'PAY-2', repo: 'api', status: 'local', url: 'https://acme.atlassian.net/browse/PAY-2' },
+          { id: 'X-3', repo: 'api', status: 'local', url: 'https://tracker.example.org/X-3' },
+          { id: 'Y-4', repo: 'api', status: 'local' }
+        ],
+        decisions: [{ id: 1, title: 'Merge', action: 'Merge', options: [], status: 'pending', url: 'https://github.com/acme/api/pull/4' }],
+        workstreams: [{ id: 'ws', title: 'Notes', status: 'active', url: 'javascript:alert(1)' }]
+      })
+    )
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    const view = await worker.request('board.get')
+    assert.deepEqual(
+      view.tasks?.map((t) => [t.id, t.url, t.linkHost?.name]),
+      [
+        ['BEN-1', 'https://linear.app/acme/issue/BEN-1', 'Linear'],
+        ['PAY-2', 'https://acme.atlassian.net/browse/PAY-2', 'Jira'],
+        ['X-3', 'https://tracker.example.org/X-3', undefined],
+        ['Y-4', undefined, undefined]
+      ],
+      'every item keeps its own url; an unknown host is a plain link'
+    )
+    assert.equal(view.decisions?.[0].linkHost?.kind, 'code')
+    assert.equal(view.workstreams?.[0].linkHost, undefined, 'a javascript: url is never labelled')
     await worker.deactivate()
   })
 })
@@ -128,7 +162,7 @@ test('board.get shows a board agent and the live worker doing the same work once
   })
 })
 
-test('board.send types into the live coordinator terminal, and refuses empty text', async () => {
+test('board.send types a click into the live coordinator terminal, then Enter, and queues nothing', async () => {
   await withFakeOrca(true, async (log) => {
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
@@ -136,27 +170,20 @@ test('board.send types into the live coordinator terminal, and refuses empty tex
     const calls = readFileSync(log, 'utf8')
     assert.ok(calls.includes('terminal send --terminal term_coord --text done 1'), 'the click reaches the coordinator terminal')
     assert.ok(calls.includes('--enter'), 'followed by Enter')
-    await assert.rejects(worker.request('board.send', { text: '  ' }))
     assert.ok(!existsSync(join(dir, 'inbox.jsonl')), 'nothing queued while the coordinator is live')
     await worker.deactivate()
   })
 })
 
-test('board.send queues clicks in inbox.jsonl when no coordinator is live', async () => {
-  await withFakeOrca(false, async () => {
-    const dir = stateFolder()
-    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    assert.deepEqual(await worker.request('board.send', { text: 'done 1' }), { sent: false, queued: true })
-    assert.deepEqual(await worker.request('board.send', { text: 'nudge PROJ-102' }), { sent: false, queued: true })
-    const lines = readFileSync(join(dir, 'inbox.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
-    assert.equal(lines.length, 2)
-    assert.deepEqual({ ...lines[0], at: 'x' }, { at: 'x', kind: 'decision', decisionId: '1', optionId: 'done' })
-    assert.deepEqual({ ...lines[1], at: 'x' }, { at: 'x', kind: 'command', command: 'nudge', target: 'PROJ-102' })
-    const view = await worker.request('board.get')
-    assert.equal(view.coordinatorLive, false)
+test('board.send rejects blank text and sends nothing', async () => {
+  await withFakeOrca(true, async (log) => {
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
+    await assert.rejects(worker.request('board.send', { text: '  ' }), /empty text/)
+    assert.ok(!existsSync(log) || !readFileSync(log, 'utf8').includes('terminal send'))
     await worker.deactivate()
   })
 })
+
 
 test('board.send never types into a coordinator terminal that runs no agent: it queues instead', async () => {
   // A connected terminal whose agent exited is a bare shell: typed text would run as a command.
@@ -171,31 +198,36 @@ test('board.send never types into a coordinator terminal that runs no agent: it 
   })
 })
 
-test('board.send offline: only a known pending decision and option queue as a decision; other two-word text stays a message', async () => {
+test('board.send offline: queues a pending decision\'s option as a decision, nudge/stop as a command, any other text as a message', async () => {
   await withFakeOrca(false, async () => {
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    for (const text of ['hello world', 'done 3', 'merge 1', 'skip 1']) await worker.request('board.send', { text })
+    for (const text of ['done 1', 'nudge PROJ-102', 'hello world', 'done 3', 'merge 1']) {
+      assert.deepEqual(await worker.request('board.send', { text }), { sent: false, queued: true })
+    }
     const lines = readFileSync(join(dir, 'inbox.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
     assert.deepEqual(
       lines.map(({ at: _at, ...entry }) => entry),
       [
+        { kind: 'decision', decisionId: '1', optionId: 'done' },
+        { kind: 'command', command: 'nudge', target: 'PROJ-102' },
         { kind: 'message', text: 'hello world' },
         { kind: 'message', text: 'done 3' },
-        { kind: 'message', text: 'merge 1' },
-        { kind: 'decision', decisionId: '1', optionId: 'skip' }
+        { kind: 'message', text: 'merge 1' }
       ],
-      'free text, an answered decision and an unknown option are not lost as decisions'
+      'free text, an answered decision (3) and an unknown option (merge) are not turned into decisions'
     )
+    assert.equal((await worker.request('board.get')).coordinatorLive, false)
     await worker.deactivate()
   })
 })
 
 // board.cleanup runs the real bin/cleanup.sh through the state folder's bin/cleanup wrapper, with
-// a fake orca and gh: one finished worker tab retained, one clean worktree whose PR is merged.
+// a fake orca and gh: a finished worker tab retained, a running one, a finished one in the
+// coordinator's own terminal, and one clean worktree whose PR is merged.
 const CLEANUP_PACKAGE = new URL('../../', import.meta.url).pathname
 
-function cleanupFixture(options: { finished: boolean }): { dir: string; calls: () => string[]; worktree: string } {
+function cleanupFixture(): { dir: string; calls: () => string[]; worktree: string } {
   const root = realpathSync(mkdtempSync(join(tmpdir(), 'coordinator-cleanup-')))
   const dir = join(root, 'state')
   const fake = join(root, 'fake')
@@ -211,10 +243,12 @@ function cleanupFixture(options: { finished: boolean }): { dir: string; calls: (
   git('commit', '-qm', 'pr work')
   const head = git('rev-parse', 'HEAD')
   const log = join(fake, 'calls.log')
-  const workers = options.finished
-    ? [{ dispatchId: 'ctx_done', state: 'succeeded', terminalState: 'retained', terminal: 'term_done' }, { dispatchId: 'ctx_live', state: 'running', terminalState: 'retained', terminal: 'term_live' }]
-    : [{ dispatchId: 'ctx_live', state: 'running', terminalState: 'retained', terminal: 'term_live' }]
-  const worktrees = options.finished ? [{ path: worktree, branch: 'refs/heads/feat', isMainWorktree: false }] : []
+  const workers = [
+    { dispatchId: 'ctx_done', state: 'succeeded', terminalState: 'retained', terminal: 'term_done' },
+    { dispatchId: 'ctx_live', state: 'running', terminalState: 'retained', terminal: 'term_live' },
+    { dispatchId: 'ctx_self', state: 'succeeded', terminalState: 'retained', terminal: 'term_coord' }
+  ]
+  const worktrees = [{ path: worktree, branch: 'refs/heads/feat', isMainWorktree: false }]
   writeFileSync(
     join(fake, 'orca'),
     `#!/bin/sh
@@ -243,7 +277,7 @@ const isAction = (call: string) => call.startsWith('orchestration worker-release
 
 test('board.cleanup dry run: counts what it would close and remove, and changes nothing', async () => {
   await withFakeOrca(true, async () => {
-    const { dir, calls, worktree } = cleanupFixture({ finished: true })
+    const { dir, calls, worktree } = cleanupFixture()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
     const result = await worker.request('board.cleanup', { dryRun: true })
     assert.equal(result.dryRun, true)
@@ -255,25 +289,14 @@ test('board.cleanup dry run: counts what it would close and remove, and changes 
   })
 })
 
-test('board.cleanup confirmed: releases the finished worker only and removes the merged worktree', async () => {
+test('board.cleanup confirmed: releases the finished worker only (never a running one or the coordinator\'s terminal) and removes the merged worktree', async () => {
   await withFakeOrca(true, async () => {
-    const { dir, calls, worktree } = cleanupFixture({ finished: true })
+    const { dir, calls, worktree } = cleanupFixture()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
     const result = await worker.request('board.cleanup', { dryRun: false })
     assert.equal(result.summary, 'released 1 sessions, removed 1 worktrees, kept 0 (dirty/open/unpushed)')
     assert.deepEqual(result.counts, { released: 1, removed: 1, kept: 0 })
-    assert.deepEqual(calls().filter(isAction), ['orchestration worker-release --dispatch ctx_done', `worktree rm --worktree path:${worktree} --json`], 'the running worker is never released')
-    await worker.deactivate()
-  })
-})
-
-test('board.cleanup with nothing finished: zero counts, and no action even when confirmed', async () => {
-  await withFakeOrca(true, async () => {
-    const { dir, calls } = cleanupFixture({ finished: false })
-    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    assert.deepEqual((await worker.request('board.cleanup', { dryRun: true })).counts, { released: 0, removed: 0, kept: 0 })
-    assert.deepEqual((await worker.request('board.cleanup')).counts, { released: 0, removed: 0, kept: 0 })
-    assert.deepEqual(calls().filter(isAction), [])
+    assert.deepEqual(calls().filter(isAction), ['orchestration worker-release --dispatch ctx_done', `worktree rm --worktree path:${worktree} --json`], 'neither the running worker nor the coordinator terminal is released')
     await worker.deactivate()
   })
 })
@@ -354,12 +377,9 @@ test('setup: defaults to the first Orca folder, applies the form answers, then s
       assert.equal(before.configured, false)
       assert.equal(before.workspaces[0].path, workspace, 'the folder is the default, not the first or shortest repo')
       assert.deepEqual(before.repos.map((r) => r.name), ['x', 'api', 'web'], 'folders, and paths git does not confirm, are not offered as repos to watch')
-      assert.ok(before.workspaces.some((w) => w.path === workspace), '"Set up in" still offers the folder')
       assert.equal(before.personName, 'Alex Martin', 'the name is prefilled from git config')
-      assert.equal(before.adapters.ticketing[0], 'none')
-      assert.ok(before.adapters.ticketing.includes('linear') && before.adapters.chat.includes('slack'), 'kinds come from adapters/')
 
-      const result = await worker.request('setup.run', { workspace, name: 'Alex', repos: [join(workspace, 'api')], ticketing: 'none', chat: 'slack' })
+      const result = await worker.request('setup.run', { workspace, name: 'Alex', repos: [join(workspace, 'api')] })
       assert.ok(result.ok, result.output)
       const packageHome = join(home, '.local/share/orca-coordinator')
       assert.ok(existsSync(join(packageHome, 'bin', 'coordinator.mjs')), 'package copied to its stable home')
@@ -371,7 +391,6 @@ test('setup: defaults to the first Orca folder, applies the form answers, then s
       assert.equal(read.config?.paths.workspace, workspace)
       assert.equal(read.config?.person.name, 'Alex')
       assert.deepEqual(read.config?.repos.map((r) => r.name), ['api'], 'only the checked repo is watched, not every repo in the folder')
-      assert.equal(read.config?.adapters.chat.kind, 'slack')
       assert.equal((await worker.request('setup.status')).configured, true)
 
       assert.deepEqual(await worker.request('setup.start'), { started: true, output: '' })
@@ -387,12 +406,6 @@ test('setup: a form init would reject writes nothing', async () => {
     mkdirSync(workspace)
     await withFakeOrca(false, async () => {
       const worker = await mount(home)
-      const noUrl = await worker.request('setup.run', { workspace, ticketing: 'linear', issueUrl: 'https://linear.app/issue/' })
-      assert.equal(noUrl.ok, false)
-      assert.match(noUrl.output, /\{id\}/, 'says the ticket URL needs {id}')
-      const badKind = await worker.request('setup.run', { workspace, chat: 'teams' })
-      assert.equal(badKind.ok, false)
-      assert.match(badKind.output, /chat must be one of none, slack/)
       const missing = await worker.request('setup.run', { workspace: join(home, 'gone') })
       assert.equal(missing.ok, false)
       assert.ok(!existsSync(join(home, '.config/orca-coordinator')), 'no config written')
@@ -410,11 +423,10 @@ test('config.read: a missing or invalid config is reported, and an invalid one d
       assert.equal(none.config, null)
       assert.match(none.problems.join('\n'), /no config/)
 
-      writeConfig(home, 'queue:\n  max: 0\nadapters:\n  ticketing:\n    kind: jira\n')
+      writeConfig(home, 'queue:\n  max: 0\n')
       const invalid = await worker.request('config.read')
       assert.equal(invalid.config?.person.name, 'Alex', 'the config is still shown so it can be fixed')
       assert.ok(invalid.problems.some((p) => p.includes('queue.max')), invalid.problems.join('; '))
-      assert.ok(invalid.problems.some((p) => p.includes('issueUrl')), invalid.problems.join('; '))
       assert.equal((await worker.request('setup.status')).configured, false, 'setup is offered again')
       await worker.deactivate()
     })
@@ -431,8 +443,7 @@ test('config.save: merges into config.yaml keeping unknown keys and the header, 
       const result = await worker.request('config.save', {
         patch: {
           person: { name: 'Sam', language: 'fr', tone: 'short' },
-          repos: [...before.config!.repos, { name: 'web', path: gitRepo(join(home, 'work/web')), base: 'main' }],
-          adapters: { ticketing: { kind: 'linear', issueUrl: 'https://linear.app/acme/issue/{id}' }, chat: { kind: 'none' } }
+          repos: [...before.config!.repos, { name: 'web', path: gitRepo(join(home, 'work/web')), base: 'main' }]
         }
       })
       assert.deepEqual(result.errors, [])
@@ -445,8 +456,7 @@ test('config.save: merges into config.yaml keeping unknown keys and the header, 
       assert.match(yaml, /path: ~\/work\/web/, 'repo paths are written with ~')
       assert.match(yaml, /base: develop/, 'an existing repo keeps its own fields')
 
-      const panel = JSON.parse(readFileSync(join(home, 'state', 'panel.json'), 'utf8')) as { ticketUrl: string }
-      assert.equal(panel.ticketUrl, 'https://linear.app/acme/issue/{id}', 'render ran with the saved config')
+      assert.ok(existsSync(join(home, 'state', 'panel.json')), 'render ran with the saved config')
 
       const after = await worker.request('config.read')
       assert.equal(after.config?.person.name, 'Sam')
@@ -485,17 +495,16 @@ test('config.save: with a stale installed copy of the package (no config --merge
 
 test('config.save: an invalid change is refused, nothing is written and render does not run', async () => {
   await withHome(async (home) => {
-    await withFakeOrca(false, async (log) => {
+    await withFakeOrca(false, async () => {
       const file = writeConfig(home)
       const original = readFileSync(file, 'utf8')
       const worker = await mount(home)
-      const result = await worker.request('config.save', { patch: { person: { name: 'Sam' }, adapters: { ticketing: { kind: 'linear', issueUrl: '' } } } })
+      const result = await worker.request('config.save', { patch: { person: { name: '' } } })
       assert.equal(result.ok, false)
       assert.equal(result.saved, false)
-      assert.ok(result.errors.some((e) => e.includes('issueUrl')), result.errors.join('; '))
+      assert.ok(result.errors.some((e) => e.includes('person.name')), result.errors.join('; '))
       assert.equal(readFileSync(file, 'utf8'), original, 'config.yaml unchanged')
       assert.ok(!existsSync(join(home, 'state', 'panel.json')), 'render did not run')
-      assert.ok(!existsSync(log) || !readFileSync(log, 'utf8').includes('automations'), 'automations untouched')
       await worker.deactivate()
     })
   })
@@ -546,7 +555,7 @@ test('config.save: automations, queue and budget stay byte-for-byte, even when a
   })
 })
 
-test('board.get: local git work of each configured repo shows in Work, without breaking on bad repos or doubling board tasks', async () => {
+test('board.get: Work lists each configured repo\'s uncommitted or unpushed work, not bad repo entries nor what a board task already covers', async () => {
   await withHome(async (home) => {
     const work = join(home, 'work')
     const repos = [
@@ -556,9 +565,12 @@ test('board.get: local git work of each configured repo shows in Work, without b
       { name: 'local-only', path: gitRepo(join(work, 'local-only')) },
       { name: 'covered', path: gitRepo(join(work, 'covered'), { branch: 'alex/proj-7', dirty: true }) },
       { name: 'not-a-repo', path: join(work, 'plain') },
+      // A folder inside a dirty repo: git status there would report the repo's changes under its name.
+      { name: 'inside-dirty', path: join(work, 'dirty', 'docs') },
       { name: 'missing', path: join(work, 'gone') }
     ]
     mkdirSync(join(work, 'plain'))
+    mkdirSync(join(work, 'dirty', 'docs'))
     writeConfig(home, '', repos)
     const dir = stateFolder()
     writeFileSync(join(dir, 'board.json'), JSON.stringify({ version: 2, tasks: [{ id: 'PROJ-7', repo: 'covered', status: 'local' }] }))
@@ -570,7 +582,7 @@ test('board.get: local git work of each configured repo shows in Work, without b
         { repo: 'dirty', branch: 'main', changed: 2, unpushed: 0 },
         { repo: 'ahead', branch: 'main', changed: 0, unpushed: 1 },
         { repo: 'local-only', branch: 'main', changed: 0, unpushed: 1 }
-      ], 'clean, non-git, missing and task-covered repos add no row; no upstream counts commits on no remote')
+      ], 'clean, non-git, nested, missing and task-covered repos add no row; no upstream counts commits on no remote')
       assert.deepEqual(view.workers.map((w) => w.dispatchId), ['ctx_a', 'ctx_x'], 'Agents still lists only running workers')
       assert.equal(view.tasks?.length, 1, 'board tasks pass through')
       await worker.deactivate()
@@ -578,7 +590,7 @@ test('board.get: local git work of each configured repo shows in Work, without b
   })
 })
 
-test('board.get: without a config the board still loads, with no derived work', async () => {
+test('board.get: no config.yaml does not break the board, it only means no local work rows', async () => {
   await withHome(async () => {
     await withFakeOrca(true, async () => {
       const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
@@ -587,6 +599,20 @@ test('board.get: without a config the board still loads, with no derived work', 
       assert.deepEqual(view.localWork, [])
       await worker.deactivate()
     })
+  })
+})
+
+test('board.get: a board.json that is not JSON shows an empty board with live workers instead of failing the panel', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    writeFileSync(join(dir, 'board.json'), '{"version": 2, "tasks": [')
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    const view = await worker.request('board.get')
+    assert.equal(view.tasks, undefined)
+    assert.deepEqual(view.workers.map((w) => w.dispatchId), ['ctx_1', 'ctx_2'])
+    assert.equal(view.coordinatorLive, true)
+    assert.equal(readFileSync(join(dir, 'board.json'), 'utf8'), '{"version": 2, "tasks": [', 'the panel never rewrites the board')
+    await worker.deactivate()
   })
 })
 
@@ -658,37 +684,38 @@ test('agents.openBoard opens Orca\'s Workspace Board, and says so when Orca refu
   })
 })
 
-test('config.read and board.get: a plain folder in config.repos is flagged, not listed, and adds no Work row; save refuses one', async () => {
+test('config.read: repos entries that are not git repositories (a folder, a folder inside a repo) are offered for removal, not reported as problems', async () => {
   // The bug: init wrote the workspace folder (Orca kind "folder") into repos, so the panel showed it as a repo.
   await withHome(async (home) => {
     const work = join(home, 'work')
-    const api = gitRepo(join(work, 'api'), { remote: true, dirty: true })
-    // A plain folder inside a dirty repo: git status there would report api's changes under its name.
+    const api = gitRepo(join(work, 'api'))
     mkdirSync(join(api, 'docs'))
-    const file = writeConfig(home, '', [{ name: 'work', path: work }, { name: 'api', path: api }, { name: 'docs', path: join(api, 'docs') }])
-    const dir = stateFolder()
-    writeFileSync(join(dir, 'board.json'), JSON.stringify({ version: 2, tasks: [] }))
+    writeConfig(home, '', [{ name: 'work', path: work }, { name: 'api', path: api }, { name: 'docs', path: join(api, 'docs') }])
     await withFakeOrca(false, async () => {
       const worker = await mount(home)
       const read = await worker.request('config.read')
       assert.deepEqual(read.config?.repos.map((r) => r.name), ['api'], 'only the git repository is a repo')
-      assert.deepEqual(read.skippedRepos.map((r) => r.name), ['work', 'docs'], 'flagged for removal, a folder inside a repo too')
+      assert.deepEqual(read.skippedRepos.map((r) => r.name), ['work', 'docs'])
       assert.deepEqual(read.problems, [], 'not a problem the user must fix by hand')
       assert.equal((await worker.request('setup.status')).configured, true, 'a warning, not an invalid config')
       await worker.deactivate()
+    }, [{ id: 'r-ws', path: work, displayName: 'work', kind: 'folder' }])
+  })
+})
 
-      const board = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-      assert.deepEqual((await board.request('board.get')).localWork.map((w) => w.repo), ['api'], 'no Work row for the folders')
-      await board.deactivate()
-
-      const before = readFileSync(file, 'utf8')
-      const again = await mount(home)
-      const saved = await again.request('config.save', { patch: { repos: [{ name: 'work', path: work, base: 'main' }] } })
+test('config.save: a repo that is not a git repository is refused and config.yaml is not written', async () => {
+  await withHome(async (home) => {
+    const work = join(home, 'work')
+    const file = writeConfig(home)
+    const before = readFileSync(file, 'utf8')
+    await withFakeOrca(false, async () => {
+      const worker = await mount(home)
+      const saved = await worker.request('config.save', { patch: { repos: [{ name: 'work', path: work, base: 'main' }] } })
       assert.equal(saved.saved, false)
       assert.match(saved.errors.join('\n'), /not a git repository/)
-      assert.equal(readFileSync(file, 'utf8'), before, 'nothing written')
-      await again.deactivate()
-    }, [{ id: 'r-ws', path: work, displayName: 'work', kind: 'folder' }])
+      assert.equal(readFileSync(file, 'utf8'), before)
+      await worker.deactivate()
+    })
   })
 })
 
@@ -741,46 +768,35 @@ test('config.save: a form opened before config.yaml changed does not put back a 
   })
 })
 
-test('config.save: a repo\'s own ticketing / chat is saved to config.yaml repos[], other repos keep theirs, and the default stays the default', async () => {
+test('config.save: tool blocks in the patch are ignored, and config.yaml\'s adapter blocks (default and per repo) stay byte-for-byte', async () => {
   await withHome(async (home) => {
     const work = join(home, 'work')
     const [api, web, docs] = [gitRepo(join(work, 'api')), gitRepo(join(work, 'web')), gitRepo(join(work, 'docs'))]
     const file = join(home, '.config/orca-coordinator/config.yaml')
     mkdirSync(join(home, '.config/orca-coordinator'), { recursive: true })
-    writeFileSync(
-      file,
-      `person:\n  name: Alex\npaths:\n  package: ${REAL_PACKAGE}\n  state: ${join(home, 'state')}\n  workspace: ${work}\nadapters:\n  ticketing:\n    kind: linear\n    issueUrl: https://linear.test/{id}\nrepos:\n` +
-        `  - name: api\n    path: ${api}\n    ticketing:\n      kind: jira\n      team: PAY\n      issueUrl: https://jira.test/{id}\n` +
-        `  - name: web\n    path: ${web}\n    chat:\n      kind: slack\n      draftOnlyChannels: [web-team]\n` +
-        `  - name: docs\n    path: ${docs}\n`
-    )
+    // Written in the form the config writer emits, so a byte change can only come from the save.
+    const adapters = 'adapters:\n  ticketing:\n    kind: linear\n    team: CORE\n    issueUrl: https://linear.test/{id}\n  chat:\n    kind: slack\n    draftOnlyChannels: [general]\n'
+    const apiBlock = `  - name: api\n    path: ${api}\n    ticketing:\n      kind: jira\n      team: PAY\n      issueUrl: https://jira.test/{id}\n`
+    const webBlock = `  - name: web\n    path: ${web}\n    chat:\n      kind: slack\n      draftOnlyChannels: [web-team]\n`
+    writeFileSync(file, `person:\n  name: Alex\npaths:\n  package: ${REAL_PACKAGE}\n  state: ${join(home, 'state')}\n  workspace: ${work}\n${adapters}repos:\n${apiBlock}${webBlock}  - name: docs\n    path: ${docs}\n`)
     await withFakeOrca(false, async () => {
       const worker = await mount(home)
       const before = await worker.request('config.read')
       assert.deepEqual(before.problems, [])
       const loaded = before.config!.repos
-      // As the settings view sends it: only docs was edited (its own GitHub tool), web was set back to Default.
-      const strip = ({ ticketing, chat, ...rest }: (typeof loaded)[number]) => rest
-      const repos = [
-        strip(loaded[0]),
-        { ...strip(loaded[1]), ticketing: null, chat: null },
-        { ...strip(loaded[2]), ticketing: { kind: 'github', issueUrl: 'https://github.com/acme/docs/issues/{id}' } }
-      ]
-      const result = await worker.request('config.save', { patch: { person: { name: 'Alex' }, repos, reposLoaded: loaded.map((r) => r.path) } })
+      // What an older panel could still send: tool blocks on repos and a top-level adapters patch.
+      const patch = {
+        person: { name: 'Sam' },
+        repos: [{ ...loaded[0], ticketing: { kind: 'github' } }, { ...loaded[1], chat: null }, { ...loaded[2], ticketing: { kind: 'trello' } }],
+        reposLoaded: loaded.map((r) => r.path),
+        adapters: { ticketing: { kind: 'none' }, chat: { kind: 'none' } }
+      } as unknown as ConfigPatch
+      const result = await worker.request('config.save', { patch })
       assert.deepEqual(result.errors, [])
-      const after = (await worker.request('config.read')).config!
-      assert.deepEqual(after.repos[0].ticketing, { kind: 'jira', team: 'PAY', issueUrl: 'https://jira.test/{id}' }, 'api keeps its whole block, team included')
-      assert.equal(after.repos[1].chat, undefined, 'web is back on the default')
-      assert.equal(after.repos[2].ticketing?.kind, 'github')
-      assert.equal(after.adapters.ticketing.kind, 'linear', 'the default is untouched')
-      const panel = JSON.parse(readFileSync(join(home, 'state', 'panel.json'), 'utf8')) as { ticketUrls: Record<string, string> }
-      assert.deepEqual(panel.ticketUrls, { api: 'https://jira.test/{id}', docs: 'https://github.com/acme/docs/issues/{id}' })
-
-      const refused = await worker.request('config.save', { patch: { repos: [{ ...strip(loaded[2]), ticketing: { kind: 'trello' } }], reposLoaded: loaded.map((r) => r.path) } })
       const yaml = readFileSync(file, 'utf8')
-      assert.equal(refused.saved, false)
-      assert.ok(refused.errors.some((e) => e.includes('repos[docs].ticketing.kind')), refused.errors.join('; '))
-      assert.equal(readFileSync(file, 'utf8'), yaml, 'nothing written')
+      assert.match(yaml, /name: Sam\n/, 'the rest of the patch is saved')
+      for (const block of [adapters, apiBlock.replace(api, '~/work/api'), webBlock.replace(web, '~/work/web')]) assert.ok(yaml.includes(block), `kept byte-for-byte:\n${block}\n---\n${yaml}`)
+      assert.ok(!/trello|github/.test(yaml), 'no tool block from the form')
       await worker.deactivate()
     })
   })

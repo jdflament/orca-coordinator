@@ -5,22 +5,17 @@
 import { execFile } from 'node:child_process'
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
-import type { Board, BoardView, CleanupResult, LiveWorker, LocalWork } from './protocol'
-import { configFile, getSetupStatus, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, updateIfInstalledHere } from './setup'
-import type { CoordinatorConfig } from './setup'
+import type { Board, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
+import { configFile, expandHome, getSetupStatus, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, updateIfInstalledHere } from './setup'
+import { linkHost } from './links'
 
 const DEFAULT_DIR = '~/.local/state/orca-coordinator'
 const FINISHED_STATES = ['succeeded', 'failed', 'stopped']
 
 let settings: { get(key: string): Promise<unknown> } | null = null
 let host: OrcaWorkerApi['host'] | null = null
-
-function expandHome(value: string): string {
-  return value.startsWith('~/') ? path.join(os.homedir(), value.slice(2)) : value
-}
 
 async function stateDir(): Promise<string> {
   const configured = await settings?.get('coordinatorDir')
@@ -98,13 +93,13 @@ function getActiveWorkers({ workers, titleOf }: Awaited<ReturnType<typeof listWo
     })
 }
 
-// ---- work derived from the configured repos: git state and the Orca workers that ran in them ----
+// ---- local work derived from the configured repos' git state ----
 
 const GIT_TIMEOUT_MS = 3000
-let configCache: { mtimeMs: number; config: CoordinatorConfig | null } | null = null
+let configCache: { mtimeMs: number; config: CoordinatorSettings | null } | null = null
 
 /** The config, re-read only when config.yaml changes (reading it runs node). */
-async function getConfig(): Promise<CoordinatorConfig | null> {
+async function getConfig(): Promise<CoordinatorSettings | null> {
   const mtimeMs = await stat(configFile()).then((s) => s.mtimeMs).catch(() => -1)
   if (mtimeMs < 0) return null
   if (configCache?.mtimeMs !== mtimeMs) configCache = { mtimeMs, config: await readConfig() }
@@ -187,22 +182,35 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
     .catch(() => fallback)
 }
 
+type PanelJson = { repoColors?: Record<string, string>; oncallLabel?: string }
+
+/** Each item keeps its own url (written by the coordinator); a known host adds an icon and a label. */
+function withLinkHosts<T extends { url?: string }>(items: T[] | undefined): T[] | undefined {
+  return items?.map((item) => {
+    const host = linkHost(item.url)
+    return host ? { ...item, linkHost: host } : item
+  })
+}
+
 async function getBoard(): Promise<BoardView> {
   const dir = await stateDir()
   const board = await readJson<Board>(path.join(dir, 'board.json'), { version: 2 })
-  const panel = await readJson<{ ticketUrl?: string; ticketUrls?: Record<string, string>; repoColors?: Record<string, string>; oncallLabel?: string }>(path.join(dir, 'panel.json'), {})
+  const read = await readJson<PanelJson>(path.join(dir, 'panel.json'), {})
+  const panel: PanelJson = read && typeof read === 'object' ? read : {}
   const handle = await getCoordinatorHandle().catch(() => '')
   const [list, coordinatorLive] = await Promise.all([listWorkers().catch(() => null), handle ? getIsCoordinatorLive(handle).catch(() => false) : Promise.resolve(false)])
   const derived = await getDerivedWork(board).catch(() => ({ localWork: [] }))
   const { workers, agents } = mergeBoardAgents(list ? getActiveWorkers(list) : [], board.agents ?? [])
   return {
     ...board,
+    decisions: withLinkHosts(board.decisions),
+    workstreams: withLinkHosts(board.workstreams),
+    tasks: withLinkHosts(board.tasks),
+    repos: withLinkHosts(board.repos),
     agents,
     workers,
     ...derived,
     coordinatorLive,
-    ticketUrl: panel.ticketUrl ?? '',
-    ticketUrls: panel.ticketUrls ?? {},
     repoColors: panel.repoColors ?? {},
     oncallLabel: panel.oncallLabel ?? 'oncall'
   }
