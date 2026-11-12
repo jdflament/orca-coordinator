@@ -103,7 +103,7 @@ function parseMapping(items, start, indent) {
   return [map, i]
 }
 
-export function parseScalar(text, line = 0) {
+function parseScalar(text, line = 0) {
   const t = text.trim()
   if (t === '' || t === '~' || t === 'null') return null
   if (t === 'true') return true

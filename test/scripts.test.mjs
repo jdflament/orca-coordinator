@@ -24,6 +24,14 @@ test('route.sh: a live coordinator gets the trigger and the run is skipped (exit
   assert.equal(send[send.indexOf('--text') + 1], '[trigger] cleanup')
 })
 
+test('route.sh: a state.md over budget.stateBytes adds "prune it first" to the trigger', () => {
+  const box = routeBox([terminals([{ handle: 'term_1', connected: true, agentIdentity: 'claude' }]), { match: ['terminal', 'send'], stdout: ok({}) }])
+  fs.writeFileSync(path.join(box.state, 'state.md'), 'x'.repeat(3000))
+  assert.equal(box.run('bin/route.sh', ['pr-review', 'none']).status, 2)
+  const send = box.calls('orca').find((a) => a[1] === 'send')
+  assert.equal(send[send.indexOf('--text') + 1], '[trigger] pr-review (state.md is 3000 bytes, over budget: prune it first)')
+})
+
 test('route.sh: no live coordinator lets the automation run (exit 0), nothing sent', () => {
   const box = routeBox([terminals([{ handle: 'term_1', connected: true, agentIdentity: null }])])
   assert.equal(box.run('bin/route.sh', ['cleanup', 'none']).status, 0)
@@ -72,10 +80,10 @@ function git(cwd, ...args) {
   return r.stdout.trim()
 }
 
-function cleanupBox({ extraCommit }) {
-  const root = 'wt'
-  const box = sandbox({ config: { paths: {} } })
-  const worktreeRoot = path.join(box.dir, root)
+// The merged-and-removed and dry-run cases run through the panel's board.cleanup (plugin/src/worker.test.ts).
+test('cleanup.sh: a clean worktree with commits its merged PR does not have is kept (bug 16)', () => {
+  const box = sandbox()
+  const worktreeRoot = path.join(box.dir, 'wt')
   box.writeConfig({ person: { name: 'Alex' }, paths: { state: box.state, workspace: box.dir, worktreeRoot, orca: path.join(box.dir, 'fake', 'orca') } })
   const repo = path.join(worktreeRoot, 'api', 'feat')
   fs.mkdirSync(repo, { recursive: true })
@@ -84,45 +92,19 @@ function cleanupBox({ extraCommit }) {
   git(repo, 'add', '.')
   git(repo, 'commit', '-qm', 'pr work')
   const prHead = git(repo, 'rev-parse', 'HEAD')
-  if (extraCommit) {
-    fs.writeFileSync(path.join(repo, 'b.txt'), 'b')
-    git(repo, 'add', '.')
-    git(repo, 'commit', '-qm', 'follow-up never pushed')
-  }
+  fs.writeFileSync(path.join(repo, 'b.txt'), 'b')
+  git(repo, 'add', '.')
+  git(repo, 'commit', '-qm', 'follow-up never pushed')
   box.fake('orca', [
     { match: ['worker-list'], stdout: ok({ workers: [] }) },
     { match: ['worktree', 'list'], stdout: ok({ worktrees: [{ path: repo, branch: 'refs/heads/feat', isMainWorktree: false }] }) },
-    { match: ['worktree', 'rm'], stdout: ok({}) },
     { match: [], stdout: ok({}) }
   ])
   box.fake('gh', [{ match: ['pr', 'list'], stdout: JSON.stringify([{ state: 'MERGED', headRefOid: prHead }]) }])
-  return { box, repo }
-}
-
-test('cleanup.sh: a clean worktree with commits its merged PR does not have is kept (bug 16)', () => {
-  const { box } = cleanupBox({ extraCommit: true })
   const out = box.run('bin/cleanup.sh')
   assert.equal(out.status, 0, out.err)
   assert.ok(!box.calls('orca').some((a) => a[0] === 'worktree' && a[1] === 'rm'))
   assert.match(out.out, /removed 0 worktrees, kept 1/)
-})
-
-test('cleanup.sh: a clean worktree whose head is in its merged PR is removed', () => {
-  const { box, repo } = cleanupBox({ extraCommit: false })
-  const out = box.run('bin/cleanup.sh')
-  assert.equal(out.status, 0, out.err)
-  const rm = box.calls('orca').find((a) => a[0] === 'worktree' && a[1] === 'rm')
-  assert.equal(rm[rm.indexOf('--worktree') + 1], `path:${repo}`)
-})
-
-test('cleanup.sh --dry-run: lists the worktree it would remove and calls no worktree rm', () => {
-  const { box, repo } = cleanupBox({ extraCommit: false })
-  const out = box.run('bin/cleanup.sh', ['--dry-run'])
-  assert.equal(out.status, 0, out.err)
-  assert.ok(!box.calls('orca').some((a) => a[0] === 'worktree' && a[1] === 'rm'))
-  assert.ok(fs.existsSync(repo))
-  assert.match(out.out, /^would remove api\/feat$/m)
-  assert.match(out.out, /released 0 sessions, removed 1 worktrees, kept 0/)
 })
 
 // ---- adapters ----

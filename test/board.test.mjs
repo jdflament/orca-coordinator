@@ -17,8 +17,7 @@ function boardIn(dir = fs.mkdtempSync(path.join(os.tmpdir(), 'board-'))) {
     const result = spawnSync(process.execPath, [...node, BOARD, ...args], { encoding: 'utf8', env: { ...process.env, COORDINATOR_BOARD: file } })
     return { status: result.status, out: result.stdout.trim(), err: result.stderr.trim() }
   }
-  const b = { dir, file, inbox, run: (...args) => run(args), runWith: run, read: () => JSON.parse(fs.readFileSync(file, 'utf8')) }
-  return b
+  return { dir, file, inbox, run: (...args) => run(args), runWith: run, read: () => JSON.parse(fs.readFileSync(file, 'utf8')) }
 }
 
 const click = (entry) => JSON.stringify({ at: '2026-11-11T10:00:00Z', ...entry }) + '\n'

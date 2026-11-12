@@ -4,14 +4,15 @@ A coordinator setup for agent-driven work on [Orca](https://orca.sh): **you talk
 agent, the coordinator; it dispatches Orca workers, judges what they bring back, keeps a
 board you can act on with one click, and asks you only for the decisions that are yours.**
 
-Everything about *you* (name, repos, tracker, chat, agents, limits) is one config file.
-Nothing in the package assumes a folder layout, a company or a tool.
+Everything about *you* (name, repos, agents, limits) is one config file; ticketing and chat
+tools are whatever your agent already has. Nothing in the package assumes a folder layout, a
+company or a tool.
 
 Three folds:
 
 1. **Board and panel.** `board.json` (schema inside) holds what needs you, the work by
    ticket, other PRs and running workers. An Orca sidebar panel shows it with imperative
-   buttons (Merge, Skip, Explain, nudge, stop) and a zero-model **Clean up** button.
+   buttons (Merge, Skip, Explain, nudge, stop) and a zero-model **Clean up** (⋯ menu).
 2. **Playbooks and automations with prechecks.** Six recurring jobs (PR comments, PR
    review, ticket triage, cleanup, weekly eval, playbook regression) as rendered specs
    for workers. Orca runs them on a schedule only when a shell precheck says something
@@ -22,14 +23,15 @@ Three folds:
 
 ## Requirements
 
-- Orca ≥ 1.4.246 with its CLI (`/Applications/Orca.app/Contents/Resources/bin/orca` on
+- Orca ≥ 1.4.248 with its CLI (`/Applications/Orca.app/Contents/Resources/bin/orca` on
   macOS, or `orca` on PATH).
 - Node.js ≥ 20.6 (the CLI and the board; no npm dependencies).
 - `git`, `gh` (GitHub CLI, signed in), `jq`.
 - An agent Orca can launch for the coordinator and for workers (Claude Code, Codex,
   OpenCode, …) that supports skills, or whose system prompt you can paste into.
 - Optional: the CLI of your tracker (`orca linear` is built into Orca; `jira` for Jira),
-  a chat credential or MCP tool, a feature-flag API credential in your keychain.
+  a chat credential or MCP tool, a feature-flag API credential in your keychain, `sqlite3`
+  (macOS ships it) for the WORKER status-line badge.
 
 ## Install
 
@@ -42,12 +44,15 @@ orca plugin install jdflament/orca-coordinator
 Orca shows what the plugin may do (it runs a small worker on your machine) and asks you to
 approve it once. The **Coordinator board** panel then opens on a setup screen: one
 **Set up in <folder>** button for your top Orca folder (**Change folder** picks another), above a
-short form (your name, the repos to watch, your ticketing and chat tools). That copies
+short form (your name and the git repositories to watch; plain folders are never offered; no
+tool settings: the coordinator uses whatever ticketing and chat tools your agent has). That copies
 the package to `~/.local/share/orca-coordinator` (Orca keeps each plugin version in its own
 folder; the skill link and the wrappers need a path that does not move) and runs
 `orca-coordinator init --yes` there. Then **Start coordinator** opens your agent in that
-workspace with the coordinator skill loaded. The gear in the panel header edits the same
-settings later (it writes `config.yaml`, then re-renders and re-registers automations).
+workspace with the coordinator skill loaded. The gear in the panel header edits your name,
+draft language and tone, and the watched git repositories later: it merges them into
+`config.yaml` (validated, read back) and re-renders. Everything else (automations, queue,
+budget, CLI adapters) is edited in `config.yaml` only.
 
 Updates come from Orca too: `orca plugin update --all` (or the Plugins page) installs the next
 release, and the panel brings the package and its rendered rules up to date the next time it
@@ -70,16 +75,18 @@ walks through each value. It finds: your name (`git config user.name`) and GitHu
 (`gh`), your language (system locale) and timezone, the agent installed (`claude`, `codex`
 or `opencode`), the workspace (the Orca repo holding the clone, else the one holding the
 folder you ran it from, else that folder), its repos and their GitHub owner, and Orca's
-worktree folder. Ticketing, chat and flags start at `none`. `--yes` takes all of it without
-asking.
+worktree folder. Ticketing and chat are not asked: the coordinator detects them (below); flags
+start at `none`. `--yes` takes all of it without asking.
 
 Non-interactive, all flags:
 
 ```sh
 ./setup.sh --yes --name Alex --github alex-dev --workspace ~/code --github-org acme \
-  --worker-agent claude --coordinator-agent claude --ticketing linear --ticketing-team ENG \
-  --issue-url 'https://linear.app/acme/issue/{id}' --chat slack --flags none --automations
+  --worker-agent claude --coordinator-agent claude --flags none --automations
 ```
+
+(Advanced, for the shell prechecks only: `--ticketing <kind> --ticketing-team --issue-url --chat <kind>`
+write the optional CLI adapter blocks described under Tools.)
 
 `init` is idempotent: it keeps a config it did not write (merge only), keeps existing
 state, re-links the skill, reloads the panel if needed, and registers only the
@@ -99,8 +106,8 @@ Orca installed from GitHub) and opens it, and, when `automations.enabled` is tru
 ## Configure
 
 One file: `~/.config/orca-coordinator/config.yaml` (or `$ORCA_COORDINATOR_CONFIG`).
-A project can add `.orca-coordinator.yaml` at its root to override keys; for ticketing and
-chat it wins over everything else for that repository. Full example
+A project can add `.orca-coordinator.yaml` at its root to override keys; for the CLI adapter
+blocks it wins over everything else for that repository. Full example
 with comments: [`config.example.yaml`](config.example.yaml). Print the merged result
 with `node bin/coordinator.mjs config` (`--keys` lists every placeholder the templates
 can use).
@@ -110,11 +117,12 @@ can use).
 | `person.name`, `github`, `language`, `tone`, `uiTermsLanguage`, `voiceFile` | how the coordinator addresses you, how drafts and review comments are written |
 | `paths.package`, `state`, `workspace`, `worktreeRoot`, `orca` | where the package, the runtime state, your Orca workspace, Orca's worktrees and the Orca CLI are |
 | `agents.coordinator.agent`, `agents.worker.{agent,model,extraArgs,permissionsFile}`, `agents.automation.provider` | which agent runs each role; the worker agent is a plain config value |
+| `agents.coordinator.statusline` | install the ◆ COORDINATOR / WORKER status-line badge (see below) |
 | `git.branchPattern`, `prTitlePattern`, `protectedBranches` | branch names for ticket worktrees (`{github}`, `{ticket}`, `{ticket-lower}`), PR titles, branches never pushed to |
-| `repos[]` | name, path and base branch of the git repositories the coordinator works in (init fills it from `orca repo list`; plain folders are ignored), and optionally the repo's own `ticketing` / `chat` block |
+| `repos[]` | name, path and base branch of the git repositories the coordinator works in (init fills it from `orca repo list`; plain folders are ignored), and optionally (advanced) the repo's own `ticketing` / `chat` CLI adapter block |
 | `github.org`, `reviewTeams`, `skipRepos`, `botReviewer`, `requestBotReview` | which PRs are yours to review, which to ignore, which bot to request |
-| `adapters.ticketing.{kind,via,team,todoStates,childLabel,issueUrl}` | the default for repos without their own block: `linear`, `jira`, `github` or `none`; how tickets are read and linked |
-| `adapters.chat.{kind,via,mentionIds,reviewChannels,draftOnlyChannels}` | the default for repos without their own block: `slack` or `none`; where review pings come from; channels where only drafts are possible |
+| `adapters.ticketing.{kind,team,todoStates,childLabel,issueUrl}` | optional, advanced, config.yaml-only: the CLI adapter the zero-model `ticket-triage` precheck uses (`linear`, `jira`, `github` or `none`); `issueUrl` only feeds the adapter's `url` verb |
+| `adapters.chat.{kind,via,mentionIds,reviewChannels,draftOnlyChannels}` | optional, advanced: `slack` or `none` for the shell scripts; `mentionIds`, `reviewChannels` and `draftOnlyChannels` also guide the coordinator whatever chat tool it uses |
 | `adapters.flags.{kind,baseUrl,project,uiUrl,secretRef}` | `unleash` or `none`; the secret stays in the keychain (`keychain:<service>`), an env var or a file |
 | `sensitive[]` | the actions the coordinator must ask you for |
 | `queue.max`, `queue.staleHours` | how many items may wait on you, when they go stale |
@@ -171,12 +179,25 @@ coordinator.
 | `eval-weekly` | last week's lessons, metrics, archive and reports → at most 3 unified diffs to the rules or playbooks |
 | `playbook-regression` | re-runs a changed playbook read-only on its last input and reports drift |
 
-Adapters under [`adapters/`](adapters/) give the playbooks one interface per tool
-kind, so a playbook says `{{adapters.ticketing.run}} --repo <repo> get <id>` whatever the
-tracker. Ticketing and chat are per repository: `<state>/bin/ticketing` and `<state>/bin/chat`
-run the tool of the repo named by `--repo` (else of the repo holding the current folder, else
-the default); `orca-coordinator adapter ticketing --repo api` shows what a repo resolves to,
-`--targets` lists every distinct setup. Writes through an adapter refuse without `--yes`.
+### Tools: detected, not configured
+
+The coordinator is an agent: it uses whatever ticketing, chat and docs tools that agent has,
+as MCP servers (Linear, Jira, Slack, Notion, GitHub…) or CLIs (`gh`, `linear`, `jira`…). At
+session start it lists them and records names only with
+`orca-coordinator tools --set "Linear:mcp,GitHub:gh"` (`<state>/panel.json`: `tools`,
+`detectedAt`; `orca-coordinator tools` prints it, for workers and automation sessions). When it
+learns which tool a repository uses it keeps a one-line hint in `state.md` (`benkyoji: tickets in
+Linear team BEN`). Board items carry their own `url`, written from the tool it used; the panel
+only recognises common hosts (linear.app, *.atlassian.net, github.com, slack.com, notion.so…) to
+pick an icon, and any other link still opens. Nothing about tools is configured or shown in the
+panel. Writes (ticket comments, status, chat posts) stay sensitive: only on your go.
+
+Advanced, config.yaml-only: the zero-model shell prechecks and [`adapters/`](adapters/) scripts
+cannot call MCP, so `adapters.ticketing` / `adapters.chat` and a repo's own `ticketing` / `chat`
+block still pick a CLI adapter for them (`<state>/bin/ticketing --repo <repo>`, `bin/chat`;
+`orca-coordinator adapter ticketing --targets` lists every setup). They are optional: with no
+ticketing CLI adapter, the `ticket-triage` precheck lets the run go ahead on schedule and the
+coordinator checks with its own tools. Writes through an adapter refuse without `--yes`.
 
 ## Automations
 
@@ -205,12 +226,26 @@ a new one.
 ## Board panel
 
 `plugin/` is the Orca panel: a plain HTML page plus a worker that reads
-`<state>/board.json`, adds the live Orca workers and whether the coordinator terminal
-is alive, and forwards clicks. Sections: header (live dot, last update, Clean up,
-jump to coordinator), focus line, counters, standing instructions, **Needs you**
-(decisions with their action badge and imperative buttons, workers waiting for input),
-**Work** (tickets grouped by workstream with repo colour, PR link, status, oncall badge,
-nudge on blocked, done fold), **Agents** (board agents and live workers with stop).
+`<state>/board.json`, adds the live Orca workers, whether the coordinator terminal is alive
+and the local git work of the configured repos, and forwards clicks. Sections: header (live
+dot, last update, Start coordinator or jump to it, ⋯ menu, settings gear), focus line,
+counters, standing instructions, **Needs you** (decisions with their action badge and
+imperative buttons, workers waiting for input), **Work** (tickets grouped by workstream with
+repo colour, PR link, status, oncall badge, nudge on blocked, done fold; then one row per
+configured repo with uncommitted or unpushed changes no board task covers, which opens that
+repo in Orca's Source Control), **Agents** (board agents and live workers with stop; the
+heading opens Orca's Workspace Board).
+
+**Clean up** (⋯ menu) first runs `bin/cleanup -n`, a dry run that changes nothing, and shows
+what it would do ("Close 2 finished worker tabs · Remove 1 merged worktree", and what it
+keeps). Only **Confirm** runs it: it releases settled worker terminals (never the
+coordinator's, never a running worker) and removes clean worktrees under
+`paths.worktreeRoot` whose PR is merged or closed (never one with local changes, an open PR,
+or commits that are neither in its PR nor on a remote).
+
+The gear opens the settings described under Install; a `repos` entry in `config.yaml` that is
+not a git repository is listed there with a **Remove from repositories** button (it is
+ignored everywhere until then).
 
 Clicks reach the coordinator as terminal text: `<option> <decision id>`,
 `nudge <ticket>`, `stop <agent>`. When no coordinator is live they queue in
@@ -229,6 +264,28 @@ board.mjs validate | show | show --json | lessons add "<miss>" "<rule>" | metric
 ```
 
 `<state>/bin/board` is the same CLI with the paths filled in; the rules call it `B`.
+
+## Status line badge
+
+`init --statusline` (or `agents.coordinator.statusline: true`) points Claude Code's
+`statusLine` in `~/.claude/settings.json` at `bin/statusline.sh`. It shows **◆ COORDINATOR**
+in the coordinator terminal (its handle is `<state>/coordinator-terminal`), **WORKER** in a
+terminal Orca dispatched a worker to, and nothing in any other session. The previous
+`statusLine` command (Orca's, say) is saved in `<state>/statusline-chain` and still runs
+first, so its line stays; `uninstall` puts it back.
+
+Orca sets no environment variable for dispatched workers, so the WORKER signal is read from
+Orca's own orchestration database: one read-only `sqlite3` query on
+`~/Library/Application Support/orca/orchestration.db` (`$ORCA_USER_DATA_PATH`, or
+`$ORCA_ORCHESTRATION_DB` for the file itself), table `dispatch_contexts`, columns
+`assignee_handle` and `creator_handle`. **This depends on Orca's internal schema**: if a
+future Orca renames them, or `sqlite3` or the file is missing, the WORKER badge silently
+disappears (never an error; ◆ COORDINATOR does not use the database).
+
+Orca leaves a user `statusLine` alone, but another tool may replace it: `orca-coordinator
+doctor` reports when it no longer points at the script, and `orca-coordinator statusline`
+re-chains it (that step only: no render, no plugin or automation changes). Other agents get a
+note to call the script from their own status-line hook.
 
 ## Self-improvement loop
 
@@ -271,8 +328,8 @@ Both accept `--dry-run`. Installed from Orca, run them as
 
 ## Contributing
 
-- `npm test` runs the Node tests (`test/`); `npm run check` adds `orca plugin validate`
-  and `orca plugin test` for the panel. No build step anywhere.
+- `npm test` runs the Node tests (`test/`); `npm run check` adds the typecheck,
+  `orca plugin validate` and `orca plugin test` (the panel worker's tests). No build step anywhere.
 - Rules go in `rules/` as short numbered Markdown files with `{{placeholders}}`; nothing
   personal, nothing vendor-specific outside `adapters/`.
 - A new tool kind is one script in `adapters/<kind>/` with the common command names,

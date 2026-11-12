@@ -22,7 +22,7 @@ Decisions:
 - **Clicks go to the coordinator terminal** as `<option> <id>` text by default; `inbox.jsonl` is only a fallback when no coordinator is live.
 - **Shared vs local layout.** Shared: `rules/`, `plugin/`, `bin/`, `prechecks/`, `adapters/`, `playbooks/`, `schema/`, `templates/`, `skill/`. Local, never committed: `config.yaml`, `rules.local.md`, `playbooks.local/`, and the runtime state (state, board, reports, lessons, metrics).
 - **Install assumes no folders.** Config at `~/.config/orca-coordinator/config.yaml` (XDG) or `$ORCA_COORDINATOR_CONFIG`; runtime state at `~/.local/state/orca-coordinator/`; optional per-project `.orca-coordinator.yaml`.
-- **`init` asks** for the few values it cannot guess: your name, draft language and tone, UI-term language, ticketing kind and team key, chat kind and draft-only channels, flags kind, agent per role, which Orca workspace hosts the coordinator (listed from Orca), repos (from `orca repo list`). Flags answer the same questions non-interactively.
+- **`init` asks** for the few values it cannot guess: your name, draft language and tone, UI-term language, flags kind, agent per role, which Orca workspace hosts the coordinator (listed from Orca), repos (from `orca repo list`). Flags answer the same questions non-interactively.
 - **Automations are opt-in**, off by default (`automations.enabled`).
 - **Adapters** expose one interface per tool kind (`get|list|comment|create|url`, `search|draft|post`, `get|list|url|toggle`) so playbooks and rules never name a vendor CLI. Writes refuse without `--yes`.
 - **Not in the package:** company or product names, chat ids, flag URLs and credential names, repo names, ticket prefixes, team labels, review prefixes, personal rules, model choices, home paths. They live in `config.yaml` and `rules.local.md`.
@@ -36,3 +36,13 @@ Decisions:
 - **Tracker rule in the skill:** tracker and GitHub stay in sync in the same step (PR attached, status follows the PR state, one child ticket per repo, design changes recorded as a comment on the parent).
 - **Worker rules in the skill:** rename every worker tab right after start; on an explicit go for a push, the coordinator answers the prompt in the worker tab itself and verifies origin.
 - **Design documents live inside the package** (`docs/`), not in loose files.
+- **Tools are detected, not configured.** The coordinator uses whatever MCP servers and CLIs its agent has, records their names with `coordinator tools --set`, and keeps a one-line hint per repo in `state.md`. The panel shows no tool settings or tool list; board items carry their own url and a known host only picks an icon. `adapters.ticketing|chat` and `repos[].ticketing|chat` stay as optional, config.yaml-only CLI adapters for the zero-model prechecks, which cannot call MCP; with none, `ticket-triage` runs on schedule.
+
+## 2026-11-12: v1.0.1, what the panel owns
+
+Supersedes the 2026-11-11 notes where they differ (the ticket-link template from config is gone: each board item carries its own url).
+
+- **The panel's settings are the person and the repos only.** Name, draft language and tone, and the watched repositories; written through `coordinator.mjs config --merge`, read back to check, then rendered. Automations, queue, budget and the CLI adapters stay `config.yaml`-only; a save never touches them, even when a patch names them. No per-repo ticketing or chat settings in the panel.
+- **Repos are git repositories only.** A `repos[]` entry that is not the top of a git work tree (the workspace folder, a folder inside a repo, a missing path) is a warning, skipped by every consumer, never written by `init` or `config --merge`, and offered for removal in the settings view.
+- **Clean up previews first.** The ⋯ menu runs `bin/cleanup -n` (changes nothing) and shows what it would close and remove; only Confirm runs it.
+- **The status-line badge reads Orca's orchestration database.** Orca sets no env var for dispatched workers, so WORKER comes from a read-only `sqlite3` query on `orchestration.db` (`dispatch_contexts.assignee_handle` / `creator_handle`). This couples the badge to Orca's internal schema; when it changes, the badge disappears rather than errors. `orca-coordinator statusline` re-chains a replaced `statusLine`.
