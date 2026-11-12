@@ -1,13 +1,14 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { parseYaml, toYaml } from '../bin/lib/yaml.mjs'
-import { defaults, loadConfig, render, templateValues, toShellExports, validate } from '../bin/lib/config.mjs'
+import { defaults, loadConfig, render, templateValues } from '../bin/lib/config.mjs'
 import { ROOT, sandbox } from './helpers.mjs'
 
-test('yaml: block maps, lists of flow maps, inline lists, quotes, comments, round trip', () => {
+test('yaml: block and flow maps, lists, quotes and comments parse as written and round-trip through toYaml', () => {
   const text = `person: {name: Alex, github: alex-dev, tone: "plain, 2-4 sentences"}
 repos:
   - {name: api, path: ~/code/api, base: main}
@@ -41,7 +42,7 @@ test('yaml: a string ending in ":" round-trips as a string, not a one-key map', 
   assert.deepEqual(parseYaml(toYaml(value)), value)
 })
 
-test('config example: it validates and renders every rule, playbook and route script as shipped', () => {
+test('config.example.yaml: it validates and renders every rule, playbook and route script as shipped', () => {
   const box = sandbox({ writeConfig: false })
   const example = path.join(ROOT, 'config.example.yaml')
   const shown = box.run('bin/coordinator.mjs', ['config', '--json', '--config', example])
@@ -57,21 +58,17 @@ test('config example: it validates and renders every rule, playbook and route sc
   assert.doesNotMatch(fs.readFileSync(path.join(config.paths.state, 'COORDINATOR.md'), 'utf8'), /\{\{/)
 })
 
-test('config: defaults validate only with a workspace, placeholders render, shell exports quote', () => {
-  const config = defaults()
-  assert.ok(validate(config).some((p) => p.includes('paths.workspace')))
-  config.paths.workspace = '/tmp/ws'
-  assert.deepEqual(validate(config), [])
-  const values = templateValues(config)
-  assert.equal(render('hi {{person.name}}, max {{queue.max}}', values), 'hi you, max 3')
-  assert.ok(values['adapters.ticketing.cmd'].endsWith('/adapters/ticketing/none.sh'))
-  assert.throws(() => render('{{nope.key}}', values), /unknown placeholder/)
-  const shell = toShellExports(config)
-  assert.match(shell, /^CFG_queue_max='3'$/m)
-  assert.match(shell, /^CFG_paths_workspace='\/tmp\/ws'$/m)
+test('config-shell.mjs: a value with quotes, $(…) and backticks reaches the shell scripts verbatim and never runs', () => {
+  const name = `O'Brien "$(touch pwned)" \`touch pwned\` $HOME`
+  const box = sandbox({ config: { person: { name } } })
+  const script = `eval "$(${JSON.stringify(process.execPath)} ${JSON.stringify(path.join(ROOT, 'bin/lib/config-shell.mjs'))})" && printf '%s' "$CFG_person_name"`
+  const out = spawnSync('bash', ['-c', script], { cwd: box.dir, env: box.env, encoding: 'utf8' })
+  assert.equal(out.status, 0, out.stderr)
+  assert.equal(out.stdout, name)
+  assert.ok(!fs.existsSync(path.join(box.dir, 'pwned')), 'nothing in the value was executed')
 })
 
-test('config: XDG path, project override and ~ expansion', () => {
+test('config: a project .orca-coordinator.yaml overrides keys over the XDG config, keeps the other defaults, and ~ expands', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'coord-home-'))
   const configDir = path.join(home, 'cfg', 'orca-coordinator')
   fs.mkdirSync(configDir, { recursive: true })
@@ -95,7 +92,7 @@ test('config: XDG path, project override and ~ expansion', () => {
   }
 })
 
-test('rules and playbooks: every template renders with the default keys', () => {
+test('rules, playbooks and templates: no file uses a placeholder the config does not define', () => {
   const config = defaults()
   config.paths.workspace = '/tmp/ws'
   const values = { ...templateValues(config), today: '2026-01-05' }
@@ -108,7 +105,7 @@ test('rules and playbooks: every template renders with the default keys', () => 
   }
 })
 
-test('release: package.json and orca-plugin.json carry the same version, plugin paths exist', () => {
+test('release: package.json and orca-plugin.json carry the same version, and the plugin\'s main and panel files exist', () => {
   const root = path.join(path.dirname(new URL(import.meta.url).pathname), '..')
   const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'))
   const plugin = JSON.parse(fs.readFileSync(path.join(root, 'orca-plugin.json'), 'utf8'))

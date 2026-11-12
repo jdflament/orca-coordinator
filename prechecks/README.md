@@ -9,7 +9,7 @@ under `<state>/automations/state/` (what it already triggered on).
 | -------- | ----------- | ---------- |
 | `pr-comments` | an open PR of yours has unresolved threads or new comments, and the set changed | `pr-comments-last.txt` |
 | `pr-review` | a PR requests your (or your team's) review at a head commit you have not reviewed | `pr-reviewed.txt` |
-| `ticket-triage` | a ticket assigned to you is in a "not started" state and was not triaged | `ticket-triaged.txt` |
+| `ticket-triage` | a ticket assigned to you is in a "not started" state and was not triaged; with no ticketing CLI adapter (the coordinator uses MCP or its own CLI), always: the run goes ahead on schedule | `ticket-triaged.txt` |
 | `eval-weekly` | `lessons.md` grew and the last run is 6+ days old | `eval-weekly-last.txt` |
 | `playbook-regression` | a rendered playbook's sha changed | `playbook-sha.txt`, `playbook-changed.txt` |
 | `none` | always (cleanup) | — |

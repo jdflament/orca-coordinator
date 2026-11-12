@@ -8,6 +8,9 @@ Terminal (handle), run (run id). Workers: --agent {{agents.worker.agent}}.
 
 ## Running workers
 
+## Tools
+One line per repo, when learned: `<repo>: tickets in <tool> <team/project>, chat <tool> #<channel>`.
+
 ## Ticket worktrees
 
 ## Parked

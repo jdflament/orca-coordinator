@@ -30,15 +30,17 @@ git:
 
 # Git repositories only (the top of a work tree); a plain folder here is ignored with a warning.
 # base: the default branch; init reads it from origin's HEAD.
-# Ticketing and chat belong to the project: a repo may carry its own `ticketing` / `chat` block
-# (same keys as under adapters). The top-level adapters are the default for repos without one; a
-# block with the same kind merges over the default, another kind starts from that tool's defaults.
-# A repo's own .orca-coordinator.yaml (at its root) wins over both.
+# Advanced, optional: a repo may carry its own `ticketing` / `chat` CLI adapter block (same keys
+# as under adapters) for the zero-model shell prechecks. The coordinator itself needs none of it:
+# it uses whatever tools its agent has (MCP or CLI) and keeps a per-repo hint in state.md.
+# The top-level adapters are the default for repos without one; a block with the same kind merges
+# over the default, another kind starts from that tool's defaults. A repo's own
+# .orca-coordinator.yaml (at its root) wins over both.
 repos:
   - name: api
     path: ~/code/api
     base: main
-    ticketing: {kind: jira, team: PAY, issueUrl: "https://acme.atlassian.net/browse/{id}"}
+    ticketing: {kind: jira, team: PAY}
     chat: {draftOnlyChannels: [payments-incidents]}
   - {name: web, path: ~/code/web, base: main}  # uses the default adapters below
 
@@ -49,14 +51,17 @@ github:
   botReviewer: ""                            # e.g. copilot-pull-request-reviewer
   requestBotReview: false                    # request that reviewer on every new PR
 
-adapters:                                    # ticketing / chat: the default for repos without their own block
+# Advanced, optional, config.yaml-only (the panel never shows or edits it). Ticketing and chat
+# are detected by the coordinator; these blocks only pick the CLI adapter (adapters/<kind>/*.sh)
+# the shell prechecks use, since they cannot call MCP. Leave kind: none to let the coordinator
+# check on schedule with its own tools. Default for repos without their own block.
+adapters:
   ticketing:
     kind: linear                             # linear | jira | github | none
-    via: cli                                 # cli (adapters/ticketing/<kind>.sh) | mcp:<tool> | script:<path>
     team: ENG                                # team key (Linear) or project key (Jira)
     todoStates: [Backlog, Todo, Triage]      # states that mean "not started"
     childLabel: ""                           # label the coordinator puts on child tickets it creates
-    issueUrl: "https://linear.app/acme/issue/{id}"
+    issueUrl: ""                             # optional: only the adapter's `url` verb uses it; board items carry their own url
   chat:
     kind: slack                              # slack | none
     via: mcp:slack                           # the agent tool family used to read chat
@@ -65,11 +70,10 @@ adapters:                                    # ticketing / chat: the default for
     draftOnlyChannels: []                    # channels the bot cannot post in: draft and tell the human
   flags:
     kind: none                               # unleash | none
-    via: cli
     baseUrl: ""                              # e.g. https://flags.example.com
     project: default
     uiUrl: ""                                # e.g. https://flags.example.com/projects/default/features/{flag}
-    secretRef: ""                             # keychain:<service> | env:<NAME> | file:<path>
+    secretRef: ""                           # keychain:<service> | env:<NAME> | file:<path>
 
 sensitive: [commit, push, pr-open, pr-merge, pr-comment, ticket-write, chat-post, db, deploy, prod, delete-branch, settings-allow-deny]
 queue: {max: 3, staleHours: 24}

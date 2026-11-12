@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { adapterFor, REPO_ADAPTERS } from './adapters.mjs'
+import { REPO_ADAPTERS } from './adapters.mjs'
 import { validateAgainst } from './validate.mjs'
 import { parseYaml, toYaml } from './yaml.mjs'
 
@@ -37,7 +37,7 @@ export function defaultOrcaBin() {
   return 'orca'
 }
 
-export const DEFAULT_AUTOMATIONS = [
+const DEFAULT_AUTOMATIONS = [
   { playbook: 'pr-comments', schedule: '0 9-19 * * 1-5', precheck: 'pr-comments', name: 'My PRs: draft replies and fixes to review comments' },
   { playbook: 'pr-review', schedule: '15 9,12,15,18 * * 1-5', precheck: 'pr-review', name: "Teammates' PRs: draft my review" },
   { playbook: 'ticket-triage', schedule: '30 9 * * 1-5', precheck: 'ticket-triage', name: 'Tickets: triage new ones and plan' },
@@ -65,9 +65,9 @@ export function defaults() {
     repos: [],
     github: { org: '', reviewTeams: [], skipRepos: [], botReviewer: '', requestBotReview: false },
     adapters: {
-      ticketing: { kind: 'none', via: 'cli', team: '', todoStates: ['Backlog', 'Todo', 'Triage'], childLabel: '', issueUrl: '' },
+      ticketing: { kind: 'none', team: '', todoStates: ['Backlog', 'Todo', 'Triage'], childLabel: '', issueUrl: '' },
       chat: { kind: 'none', via: 'mcp:slack', mentionIds: [], reviewChannels: [], draftOnlyChannels: [] },
-      flags: { kind: 'none', via: 'cli', uiUrl: '', secretRef: '', baseUrl: '', project: 'default' }
+      flags: { kind: 'none', uiUrl: '', secretRef: '', baseUrl: '', project: 'default' }
     },
     sensitive: ['commit', 'push', 'pr-open', 'pr-merge', 'pr-comment', 'ticket-write', 'chat-post', 'db', 'deploy', 'prod', 'delete-branch', 'settings-allow-deny'],
     queue: { max: 3, staleHours: 24 },
@@ -91,7 +91,7 @@ export function readYamlFile(file) {
   return parseYaml(fs.readFileSync(file, 'utf8'))
 }
 
-export function findProjectConfig(from = process.cwd()) {
+function findProjectConfig(from = process.cwd()) {
   let dir = path.resolve(from)
   for (;;) {
     const candidate = path.join(dir, '.orca-coordinator.yaml')
@@ -179,7 +179,6 @@ export function validate(config) {
   if (!TICKETING_KINDS.includes(config.adapters.ticketing.kind)) problems.push(`adapters.ticketing.kind must be one of ${TICKETING_KINDS.join('|')}`)
   if (!CHAT_KINDS.includes(config.adapters.chat.kind)) problems.push(`adapters.chat.kind must be one of ${CHAT_KINDS.join('|')}`)
   if (!FLAGS_KINDS.includes(config.adapters.flags.kind)) problems.push(`adapters.flags.kind must be one of ${FLAGS_KINDS.join('|')}`)
-  if (config.adapters.ticketing.kind !== 'none' && !config.adapters.ticketing.issueUrl) problems.push('adapters.ticketing.issueUrl is empty (template with {id})')
   if (typeof config.queue.max !== 'number' || config.queue.max < 1) problems.push('queue.max must be a number ≥ 1')
   if (typeof config.budget.stateBytes !== 'number' || config.budget.stateBytes < 500) problems.push('budget.stateBytes must be a number ≥ 500')
   for (const job of config.automations.jobs || []) {
@@ -194,7 +193,7 @@ export function validate(config) {
 const CONFIG_SCHEMA = JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'schema', 'config.schema.json'), 'utf8'))
 const KINDS = { ticketing: TICKETING_KINDS, chat: CHAT_KINDS }
 
-/** A repo's own ticketing / chat blocks: shape (schema/config.schema.json), known kind, and a ticket URL once resolved. */
+/** A repo's own ticketing / chat blocks (advanced, for the shell prechecks): shape (schema/config.schema.json) and known kind. */
 function validateRepoAdapters(config) {
   const problems = []
   const label = (i) => `repos[${config.repos[i]?.name || i}]`
@@ -211,16 +210,13 @@ function validateRepoAdapters(config) {
       if (typeof block !== 'object' || Array.isArray(block)) continue
       if (block.kind !== undefined && !KINDS[kind].includes(block.kind)) {
         problems.push(`${label(i)}.${kind}.kind must be one of ${KINDS[kind].join('|')}`)
-        continue
       }
-      const resolved = adapterFor(config, kind, repo)
-      if (kind === 'ticketing' && resolved.kind !== 'none' && !resolved.issueUrl) problems.push(`${label(i)}.ticketing.issueUrl is empty (template with {id})`)
     }
   })
   return problems
 }
 
-export function derived(config) {
+function derived(config) {
   const pkg = config.paths.package
   const state = config.paths.state
   const configDir = path.dirname(defaultConfigPath())
@@ -253,7 +249,7 @@ export function derived(config) {
   }
 }
 
-export function flatten(value, prefix = '', out = {}) {
+function flatten(value, prefix = '', out = {}) {
   if (Array.isArray(value)) {
     out[prefix] = value.map((v) => (typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v ?? ''))).join(', ')
     out[`${prefix}.json`] = JSON.stringify(value)
@@ -292,9 +288,4 @@ export function shellQuote(value) {
   return `'${String(value).replace(/'/g, `'\\''`)}'`
 }
 
-export function writeYaml(file, value) {
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, toYaml(value))
-}
-
-export { parseYaml, toYaml }
+export { toYaml }

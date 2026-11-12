@@ -1,6 +1,7 @@
-// Ticketing and chat per repository: a repos[] entry's own block, the top-level default, and a
-// repository's own .orca-coordinator.yaml, resolved the same way by the CLI, the rendered
-// wrappers, the adapters (through env.sh) and the prechecks.
+// The optional CLI adapters (advanced, config.yaml-only) for ticketing and chat per repository:
+// a repos[] entry's own block, the top-level default, and a repository's own .orca-coordinator.yaml,
+// resolved the same way by the CLI, the rendered wrappers, the adapters (through env.sh) and the
+// zero-model prechecks; and `coordinator tools`, the record of the tools the coordinator detected.
 import assert from 'node:assert/strict'
 import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -58,10 +59,6 @@ test('per-repo ticketing: a repo with its own block uses its tool (by --repo or 
   const unknown = wrapper(box, 'ticketing', ['--repo', 'apii', 'url', 'X-1'])
   assert.notEqual(unknown.status, 0, 'a mistyped repo never falls back to another project\'s tool')
   assert.match(unknown.err, /unknown repo: apii/)
-
-  const panel = JSON.parse(fs.readFileSync(path.join(box.state, 'panel.json'), 'utf8'))
-  assert.equal(panel.ticketUrl, 'https://linear.test/{id}')
-  assert.deepEqual(panel.ticketUrls, { api: 'https://jira.test/browse/{id}' }, 'only repos that differ from the default')
 })
 
 test('per-repo chat: a repo block with the same tool merges over the default (credential kept, its own draft-only channels)', () => {
@@ -87,31 +84,67 @@ test('a repository\'s own .orca-coordinator.yaml wins over its repos[] block', (
   assert.equal(JSON.parse(box.run(CLI, ['adapter', 'ticketing', '--repo', 'web']).out).kind, 'linear', 'other repos are not affected')
 })
 
-test('config --merge: an unknown per-repo kind, or a repo tool without a ticket URL, is refused and nothing is written', () => {
+test('config --merge: an unknown per-repo adapter kind or a mis-shaped block is refused and nothing is written', () => {
   const { box, api } = perRepoBox()
   const before = fs.readFileSync(box.configPath, 'utf8')
   const trello = box.run(CLI, ['config', '--merge', JSON.stringify({ repos: [{ name: 'api', path: api, ticketing: { kind: 'trello' } }] })])
   assert.equal(trello.status, 2)
   assert.match(trello.err, /repos\[api\]\.ticketing\.kind must be one of linear\|jira\|github\|none/)
-  const noUrl = box.run(CLI, ['config', '--merge', JSON.stringify({ adapters: { ticketing: { kind: 'none' } }, repos: [{ name: 'api', path: api, ticketing: { kind: 'jira' } }] })])
-  assert.equal(noUrl.status, 2)
-  assert.match(noUrl.err, /repos\[api\]\.ticketing\.issueUrl is empty/)
   const badShape = box.run(CLI, ['config', '--merge', JSON.stringify({ repos: [{ name: 'api', path: api, chat: { kind: 'slack', draftOnlyChannels: 'general' } }] })])
   assert.equal(badShape.status, 2)
   assert.match(badShape.err, /repos\[api\]\.chat\.draftOnlyChannels: expected array/)
   assert.equal(fs.readFileSync(box.configPath, 'utf8'), before)
 })
 
-test('prechecks/ticket-triage.sh: lists the tickets of every ticketing setup, the default and each repo\'s own', () => {
-  const { box } = perRepoBox({ ticketing: { kind: 'github', issueUrl: 'https://github.com/acme/api/issues/{id}' } })
+test('prechecks/ticket-triage.sh: lists the not-started tickets of every ticketing setup, the default and each repo\'s own', () => {
+  const { box } = perRepoBox({ ticketing: { kind: 'github' } })
   box.fake('orca', [{ match: ['linear', 'list'], stdout: ok({ issues: [{ identifier: 'CORE-1', state: { name: 'Todo' } }, { identifier: 'CORE-2', state: { name: 'Done' } }] }) }])
   box.fake('gh', [{ match: ['search', 'issues'], stdout: JSON.stringify([{ number: 7, repository: { nameWithOwner: 'acme/api' }, labels: [{ name: 'Todo' }], state: 'open' }]) }])
   const out = box.run('prechecks/ticket-triage.sh')
   assert.equal(out.status, 0, out.err + out.out + JSON.stringify(box.calls()))
   assert.equal(out.out, 'untriaged: acme/api#7 CORE-1', 'both setups, CORE-2 (Done) left out')
+})
 
-  const failing = perRepoBox({ ticketing: { kind: 'github', issueUrl: 'https://github.com/acme/api/issues/{id}' } }).box
-  failing.fake('orca', [{ match: ['linear', 'list'], stdout: ok({ issues: [] }) }])
-  failing.fake('gh', [{ match: ['search', 'issues'], stdout: 'boom', status: 1 }])
-  assert.equal(failing.run('prechecks/ticket-triage.sh').status, 4, 'a failing tool is an error, not "nothing new"')
+test('prechecks/ticket-triage.sh: a failing ticketing CLI is an error (exit 4), not "nothing new"', () => {
+  const { box } = perRepoBox({ ticketing: { kind: 'github' } })
+  box.fake('orca', [{ match: ['linear', 'list'], stdout: ok({ issues: [] }) }])
+  box.fake('gh', [{ match: ['search', 'issues'], stdout: 'boom', status: 1 }])
+  assert.equal(box.run('prechecks/ticket-triage.sh').status, 4)
+})
+
+test('prechecks/ticket-triage.sh: with no ticketing CLI adapter (the coordinator uses MCP or its own CLI), the run goes ahead on schedule', () => {
+  const { box, api } = perRepoBox({})
+  box.writeConfig({ person: { name: 'Alex' }, paths: { state: box.state, workspace: path.dirname(api), orca: path.join(box.dir, 'fake', 'orca') }, repos: [{ name: 'api', path: api }] })
+  const out = box.run('prechecks/ticket-triage.sh')
+  assert.equal(out.status, 0, out.err + out.out)
+  assert.match(out.out, /no ticketing CLI adapter/)
+  assert.deepEqual(box.calls('gh'), [], 'no tool was called')
+})
+
+test('coordinator tools --set: records each name once, keeps render\'s panel.json keys, and render keeps the record', () => {
+  const { box } = perRepoBox()
+  assert.equal(box.run(CLI, ['render']).status, 0)
+  const set = box.run(CLI, ['tools', '--set', 'Linear:mcp, GitHub:gh, linear:cli, Slack'])
+  assert.equal(set.status, 0, set.err)
+  const file = path.join(box.state, 'panel.json')
+  let panel = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual(panel.tools, [{ name: 'Linear', via: 'mcp' }, { name: 'GitHub', via: 'gh' }, { name: 'Slack', via: 'agent' }], 'once per name, via defaults to agent')
+  assert.ok(!Number.isNaN(Date.parse(panel.detectedAt)))
+  assert.equal(panel.oncallLabel, 'oncall', 'render\'s keys are kept')
+
+  assert.equal(box.run(CLI, ['render']).status, 0)
+  panel = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual(panel.tools.map((t) => t.name), ['Linear', 'GitHub', 'Slack'], 'render keeps the coordinator\'s record')
+  assert.deepEqual(JSON.parse(box.run(CLI, ['tools']).out).tools.map((t) => t.name), ['Linear', 'GitHub', 'Slack'], '`tools` prints it')
+})
+
+test('coordinator tools --set: a bad entry is refused and panel.json is not written', () => {
+  const { box } = perRepoBox()
+  assert.equal(box.run(CLI, ['render']).status, 0)
+  const file = path.join(box.state, 'panel.json')
+  const before = fs.readFileSync(file, 'utf8')
+  const bad = box.run(CLI, ['tools', '--set', 'Linear:mcp,' + 'x'.repeat(41)])
+  assert.notEqual(bad.status, 0)
+  assert.match(bad.err, /bad entry/)
+  assert.equal(fs.readFileSync(file, 'utf8'), before)
 })

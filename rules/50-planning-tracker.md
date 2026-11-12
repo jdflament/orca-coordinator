@@ -11,7 +11,7 @@
 
 ## Tracker and GitHub stay in sync, in the same step
 
-Every change on a PR updates its ticket in the same step, through that repo's ticketing adapter (`{{adapters.ticketing.run}} --repo <repo>`) once {{person.name}} has said go:
+Every change on a PR updates its ticket in the same step, through that repo's ticketing tool (the one its `state.md` hint names, MCP or CLI; else the CLI adapter `{{adapters.ticketing.run}} --repo <repo>` when one is configured) once {{person.name}} has said go:
 - The PR is attached to the ticket (link or attachment) as soon as it exists.
 - The ticket status follows the PR state (open → in review, merged → done, closed without merge → back to its previous state).
 - A design decision taken during implementation is recorded as one comment on the parent ticket.

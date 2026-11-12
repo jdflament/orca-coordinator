@@ -1,6 +1,12 @@
 # Adapters
 
-One script per tool, one interface per kind, so playbooks and rules never name a
+Optional and advanced. The coordinator uses whatever ticketing and chat tools its agent has
+(MCP servers or CLIs) and records them with `orca-coordinator tools --set`; these scripts exist
+for the zero-model shell prechecks (and anyone who prefers a CLI), which cannot call MCP. They
+are configured in `config.yaml` only; the panel never shows them. With no ticketing adapter the
+`ticket-triage` precheck lets its run go ahead on schedule.
+
+One script per tool, one interface per kind, so the shell side never names a
 vendor CLI. `config.yaml` picks the kind (`adapters.<kind>.kind`); the rendered
 playbooks call `{{adapters.ticketing.run}} --repo <repo>` / `{{adapters.chat.run}} --repo <repo>`.
 
@@ -21,7 +27,7 @@ explicit go.
 | ------- | ------ |
 | `get <id>` | the issue with comments, JSON when the tool has it |
 | `list [--todo]` | identifiers of the human's assigned issues, one per line (`--todo`: only `todoStates`) |
-| `url <id>` | the UI link (`adapters.ticketing.issueUrl`) |
+| `url <id>` | the UI link from the optional `adapters.ticketing.issueUrl` template (the panel uses each item's own url) |
 | `comment <id> <text> --yes` | adds a comment (write) |
 | `create <json> --yes` | creates an issue from `{title, description, parent?, labels?}` (write) |
 | `status <id> <state> --yes` | moves an issue (write) |

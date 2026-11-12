@@ -27,11 +27,12 @@ import {
   FLAGS_KINDS,
   isGitRepo,
   loadConfig,
+  notGitWarning,
   PACKAGE_ROOT,
   readYamlFile,
-  notGitWarning,
   render,
   repoWarnings,
+  shellQuote,
   templateValues,
   TICKETING_KINDS,
   toShellExports,
@@ -133,6 +134,12 @@ function today() {
   return new Date().toISOString().slice(0, 10)
 }
 
+/** ~ for a path under the home folder, so the config file stays portable; anything else as is. */
+function tilde(value) {
+  const home = os.homedir()
+  return typeof value === 'string' && value.startsWith(home + '/') ? '~' + value.slice(home.length) : value
+}
+
 // ---- init ----
 
 const QUESTIONS = [
@@ -147,11 +154,13 @@ const QUESTIONS = [
   { key: 'agents.worker.agent', flag: 'worker-agent', ask: 'Agent id for workers' },
   { key: 'agents.automation.provider', flag: 'automation-provider', ask: 'Agent id automations start when no coordinator is live' },
   { key: 'github.org', flag: 'github-org', ask: 'GitHub organisation (owner) of your repos' },
-  { key: 'adapters.ticketing.kind', flag: 'ticketing', ask: `Ticketing tool (${TICKETING_KINDS.join('|')})`, oneOf: TICKETING_KINDS },
-  { key: 'adapters.ticketing.team', flag: 'ticketing-team', ask: 'Team or project key in the ticketing tool', when: (c) => c.adapters.ticketing.kind !== 'none' },
-  { key: 'adapters.ticketing.issueUrl', flag: 'issue-url', ask: 'Ticket URL template, {id} for the identifier', when: (c) => c.adapters.ticketing.kind !== 'none' },
-  { key: 'adapters.chat.kind', flag: 'chat', ask: `Chat tool (${CHAT_KINDS.join('|')})`, oneOf: CHAT_KINDS },
-  { key: 'adapters.chat.draftOnlyChannels', flag: 'draft-only-channels', ask: 'Channels the bot cannot post in (comma separated, empty for none)', list: true, when: (c) => c.adapters.chat.kind !== 'none' },
+  // Ticketing and chat are detected by the coordinator (MCP servers, CLIs): never asked. These flags
+  // only write the optional CLI adapters the zero-model shell prechecks use (advanced).
+  { key: 'adapters.ticketing.kind', flag: 'ticketing', ask: `Ticketing tool (${TICKETING_KINDS.join('|')})`, oneOf: TICKETING_KINDS, advanced: true },
+  { key: 'adapters.ticketing.team', flag: 'ticketing-team', ask: 'Team or project key in the ticketing tool', advanced: true },
+  { key: 'adapters.ticketing.issueUrl', flag: 'issue-url', ask: 'Ticket URL template, {id} for the identifier', advanced: true },
+  { key: 'adapters.chat.kind', flag: 'chat', ask: `Chat tool (${CHAT_KINDS.join('|')})`, oneOf: CHAT_KINDS, advanced: true },
+  { key: 'adapters.chat.draftOnlyChannels', flag: 'draft-only-channels', ask: 'Channels the bot cannot post in (comma separated, empty for none)', list: true, advanced: true },
   { key: 'adapters.flags.kind', flag: 'flags', ask: `Feature-flag tool (${FLAGS_KINDS.join('|')})`, oneOf: FLAGS_KINDS }
 ]
 
@@ -244,7 +253,7 @@ function applyFlags(config) {
 
 async function askQuestions(config, rl) {
   for (const q of QUESTIONS) {
-    if (q.when && !q.when(config)) continue
+    if (q.advanced) continue
     const current = getPath(config, q.key)
     const choices = q.choices ? q.choices(config) : []
     if (choices.length) console.log(`  known: ${choices.join(', ')}`)
@@ -305,17 +314,16 @@ function detectDefaults(config, keep) {
 }
 
 function summary(config) {
-  const home = os.homedir()
-  const tilde = (p) => (p && p.startsWith(home + '/') ? '~' + p.slice(home.length) : p || '(none yet)')
+  const shown = (p) => tilde(p) || '(none yet)'
   const a = config.adapters
   const rows = [
     ['You', `${config.person.name}${config.person.github ? ` (github: ${config.person.github})` : ''}, language ${config.person.language}`],
-    ['Workspace', tilde(config.paths.workspace)],
-    ['Worktrees', tilde(config.paths.worktreeRoot)],
+    ['Workspace', shown(config.paths.workspace)],
+    ['Worktrees', shown(config.paths.worktreeRoot)],
     ['Agent', `${config.agents.coordinator.agent} (coordinator), ${config.agents.worker.agent} (workers)`],
     ['GitHub org', config.github.org || '(none)'],
     ['Repos', config.repos.map((r) => r.name).join(', ') || '(none)'],
-    ['Tools', `ticketing ${a.ticketing.kind}, chat ${a.chat.kind}, flags ${a.flags.kind}`],
+    ['Tools', `detected by the coordinator at session start${a.ticketing.kind !== 'none' || a.chat.kind !== 'none' ? ` (CLI adapters for prechecks: ticketing ${a.ticketing.kind}, chat ${a.chat.kind})` : ''}, flags ${a.flags.kind}`],
     ['Automations', `${config.automations.enabled ? 'on' : 'off'} (${config.automations.timezone})`]
   ]
   return rows.map(([k, v]) => `  ${k.padEnd(12)} ${v}`).join('\n')
@@ -408,8 +416,6 @@ async function init() {
 
 /** Serialize with ~ for home paths so the file stays portable. */
 function configForFile(config) {
-  const home = os.homedir()
-  const tilde = (p) => (typeof p === 'string' && p.startsWith(home + '/') ? '~' + p.slice(home.length) : p)
   const out = JSON.parse(JSON.stringify(config))
   for (const key of Object.keys(out.paths)) out.paths[key] = tilde(out.paths[key])
   out.repos = out.repos.map((r) => ({ ...r, path: tilde(r.path) }))
@@ -436,8 +442,6 @@ function configMerge(configPath, json) {
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('--merge expects a JSON object')
   if (!fs.existsSync(configPath)) throw new Error(`no config at ${configPath}: run "orca-coordinator init" first`)
   const original = fs.readFileSync(configPath, 'utf8')
-  const home = os.homedir()
-  const tilde = (p) => (typeof p === 'string' && p.startsWith(home + '/') ? '~' + p.slice(home.length) : p)
   if (Array.isArray(patch.repos)) {
     const notGit = patch.repos.filter((r) => !r || typeof r !== 'object' || !isGitRepo(expandHome(String(r.path || ''))))
     warn(notGit.map(notGitWarning))
@@ -508,22 +512,22 @@ function renderAll(config) {
     writeFile(path.join(state, 'playbooks', `${name}.md`), text)
   }
 
-  // panel.json: what the panel needs from config without reading yaml.
-  writeFile(
-    path.join(state, 'panel.json'),
-    JSON.stringify({ ticketUrl: config.adapters.ticketing.issueUrl || '', ticketUrls: repoTicketUrls(config), repoColors: config.board.repoColors || {}, oncallLabel: config.board.oncallLabel || 'oncall' }, null, 2) + '\n'
-  )
+  // panel.json: what the panel needs from config without reading yaml, plus the tools record the
+  // coordinator wrote (`coordinator tools --set`, read by workers and automation sessions), kept as it is.
+  const recorded = readPanelJson(state)
+  const kept = Object.fromEntries(['tools', 'detectedAt'].filter((key) => key in recorded).map((key) => [key, recorded[key]]))
+  writeFile(path.join(state, 'panel.json'), JSON.stringify({ repoColors: config.board.repoColors || {}, oncallLabel: config.board.oncallLabel || 'oncall', ...kept }, null, 2) + '\n')
 
   // Wrappers: short scripts the rules, the panel and the human call by a fixed name.
   const pkg = PACKAGE_ROOT
-  const env = `COORDINATOR_PACKAGE=${q(pkg)} COORDINATOR_STATE=${q(state)} COORDINATOR_BOARD=${q(path.join(state, 'board.json'))} ORCA_COORDINATOR_CONFIG=${q(defaultConfigPath())}`
+  const env = `COORDINATOR_PACKAGE=${shellQuote(pkg)} COORDINATOR_STATE=${shellQuote(state)} COORDINATOR_BOARD=${shellQuote(path.join(state, 'board.json'))} ORCA_COORDINATOR_CONFIG=${shellQuote(defaultConfigPath())}`
   const wrap = (name, body) => writeFile(path.join(state, 'bin', name), `#!/usr/bin/env bash\n# generated by orca-coordinator render\nexport ${env}\n${body}\n`, { executable: true })
-  wrap('board', `exec ${q(process.execPath)} ${q(path.join(pkg, 'bin', 'board.mjs'))} "$@"`)
-  wrap('cleanup', `exec bash ${q(path.join(pkg, 'bin', 'cleanup.sh'))} "$@"`)
-  wrap('metrics', `exec bash ${q(path.join(pkg, 'bin', 'metrics.sh'))} "$@"`)
-  wrap('lessons', `exec bash ${q(path.join(pkg, 'bin', 'lessons.sh'))} "$@"`)
-  wrap('state', `exec bash ${q(path.join(pkg, 'bin', 'state.sh'))} "$@"`)
-  wrap('coordinator', `exec ${q(process.execPath)} ${q(path.join(pkg, 'bin', 'coordinator.mjs'))} "$@"`)
+  wrap('board', `exec ${shellQuote(process.execPath)} ${shellQuote(path.join(pkg, 'bin', 'board.mjs'))} "$@"`)
+  wrap('cleanup', `exec bash ${shellQuote(path.join(pkg, 'bin', 'cleanup.sh'))} "$@"`)
+  wrap('metrics', `exec bash ${shellQuote(path.join(pkg, 'bin', 'metrics.sh'))} "$@"`)
+  wrap('lessons', `exec bash ${shellQuote(path.join(pkg, 'bin', 'lessons.sh'))} "$@"`)
+  wrap('state', `exec bash ${shellQuote(path.join(pkg, 'bin', 'state.sh'))} "$@"`)
+  wrap('coordinator', `exec ${shellQuote(process.execPath)} ${shellQuote(path.join(pkg, 'bin', 'coordinator.mjs'))} "$@"`)
   // ticketing / chat [--repo <name>] <args>: the adapter of that repo (else of the folder it runs in, else the default).
   for (const kind of REPO_ADAPTERS) {
     wrap(
@@ -531,7 +535,7 @@ function renderAll(config) {
       [
         'repo="${COORDINATOR_REPO:-}"',
         'if [ "${1:-}" = "--repo" ]; then repo="${2:?repo name}"; shift 2; fi',
-        `cmd="$(COORDINATOR_REPO="$repo" ${q(process.execPath)} ${q(path.join(pkg, 'bin', 'coordinator.mjs'))} adapter ${kind} --cmd)" || exit 3`,
+        `cmd="$(COORDINATOR_REPO="$repo" ${shellQuote(process.execPath)} ${shellQuote(path.join(pkg, 'bin', 'coordinator.mjs'))} adapter ${kind} --cmd)" || exit 3`,
         'COORDINATOR_REPO="$repo" exec bash "$cmd" "$@"'
       ].join('\n')
     )
@@ -539,12 +543,8 @@ function renderAll(config) {
 
   // Route scripts for automations (one per job), used as Orca prechecks.
   for (const job of config.automations.jobs || []) {
-    wrap(`../automations/route-${job.playbook}.sh`, `exec bash ${q(path.join(pkg, 'bin', 'route.sh'))} ${q(job.playbook)} ${q(job.precheck || 'none')}`)
+    wrap(`../automations/route-${job.playbook}.sh`, `exec bash ${shellQuote(path.join(pkg, 'bin', 'route.sh'))} ${shellQuote(job.playbook)} ${shellQuote(job.precheck || 'none')}`)
   }
-}
-
-function q(s) {
-  return `'${String(s).replace(/'/g, `'\\''`)}'`
 }
 
 const SKILL_DIRS = [
@@ -752,14 +752,34 @@ function automationsList(config) {
   }
 }
 
-/** Each repo's own ticket URL template, where it differs from the default (panel.json). */
-function repoTicketUrls(config) {
-  const urls = {}
-  for (const repo of config.repos) {
-    const url = adapterFor(config, 'ticketing', repo).issueUrl || ''
-    if (url !== (config.adapters.ticketing.issueUrl || '')) urls[repo.name] = url
+/** <state>/panel.json as an object; {} when missing or corrupt. */
+function readPanelJson(state) {
+  try {
+    const value = JSON.parse(fs.readFileSync(path.join(state, 'panel.json'), 'utf8'))
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  } catch {
+    return {}
   }
-  return urls
+}
+
+/**
+ * tools: print the coordinator's tools record (panel.json). tools --set "Linear:mcp,GitHub:gh":
+ * replace it (names and how they are reached only, never a token), stamped with detectedAt. The
+ * panel does not show it; `tools` prints it for workers and automation sessions. Other panel.json keys are kept.
+ */
+function toolsCommand(config) {
+  const state = config.paths.state
+  const panel = readPanelJson(state)
+  const spec = opt('set')
+  if (spec === undefined) return console.log(JSON.stringify({ tools: panel.tools ?? null, detectedAt: panel.detectedAt ?? null }, null, 2))
+  const tools = []
+  for (const part of String(spec).split(',').map((s) => s.trim()).filter(Boolean)) {
+    const [name, via = 'agent'] = part.split(':').map((s) => s.trim())
+    if (!name || name.length > 40 || via.length > 40 || /[\u0000-\u001f]/.test(part)) throw new Error(`tools --set: bad entry "${part}" (expected Name:via, e.g. Linear:mcp)`)
+    if (!tools.some((t) => t.name.toLowerCase() === name.toLowerCase())) tools.push({ name, via: via || 'agent' })
+  }
+  writeFile(path.join(state, 'panel.json'), JSON.stringify({ ...panel, tools, detectedAt: new Date().toISOString() }, null, 2) + '\n')
+  report()
 }
 
 /**
@@ -819,6 +839,17 @@ function doctor() {
     ok('rendered rules', rendered, rendered ? path.join(config.paths.state, 'COORDINATOR.md') : 'missing, run render')
     const skill = SKILL_DIRS.map((e) => expandHome(e.dir)).filter((d) => isLink(d) || fs.existsSync(d))
     ok('skill installed', skill.length > 0, skill.join(', ') || 'no agent skills folder links to skill/coordinator')
+    if (config.agents.coordinator.statusline && config.agents.coordinator.agent === 'claude') {
+      // Orca leaves a user statusLine alone, but anything else may replace it: say so, and how to re-chain.
+      let current = null
+      try {
+        current = JSON.parse(fs.readFileSync(expandHome('~/.claude/settings.json'), 'utf8')).statusLine?.command ?? null
+      } catch {
+        // missing or unreadable: reported as not installed
+      }
+      const script = path.join(PACKAGE_ROOT, 'bin', 'statusline.sh')
+      ok('status line', current === script, current === script ? script : `~/.claude/settings.json statusLine is ${current ? 'another command' : 'not set'}; run "orca-coordinator statusline" to chain it`)
+    }
     if (version.status === 0) {
       const mine = findPlugin(config)
       ok('panel plugin', Boolean(mine), mine ? `${mine.pluginKey} ${mine.status}${mine.isDev ? ' (development folder)' : ''} from ${mine.source?.reference ?? mine.devPath ?? 'Orca'}` : 'not installed (install it from Orca, or plugin load)')
@@ -912,16 +943,19 @@ function usage() {
   init         write config, create state, render, install skill, load panel, register automations
                flags: --name --github --language --tone --ui-language --workspace --worktree-root
                       --coordinator-agent --worker-agent --automation-provider --github-org
-                      --review-team <team> (repeatable) --branch-pattern --ticketing <kind>
-                      --ticketing-team --issue-url --chat <kind> --draft-only-channels a,b --flags <kind>
+                      --review-team <team> (repeatable) --branch-pattern --flags <kind>
+                      advanced (CLI adapters for shell prechecks; tools are detected otherwise):
+                      --ticketing <kind> --ticketing-team --issue-url --chat <kind> --draft-only-channels a,b
                       --repo <path> (repeatable) | --no-repos
                       --automations --statusline --timezone --skill-dir <dir> --no-plugin
                       --config <file> --state <dir> --force
   render       rebuild COORDINATOR.md, playbooks/, panel.json and the bin wrappers from config
-  adapter      ticketing|chat [--repo <name>] [--cmd | --targets]: the tool a repo uses (its own block, else the default)
+  tools        print the tools the coordinator recorded; --set "Linear:mcp,GitHub:gh" records them (names only)
+  adapter      ticketing|chat [--repo <name>] [--cmd | --targets]: the optional CLI adapter a repo's prechecks use
   config       print the merged config: --json | --shell | --keys | --path | --skipped-repos (non-git repos entries, ignored)
                --merge '<json>': merge into config.yaml (arrays replace), validate, write
   doctor       check the installation
+  statusline   install (or re-chain) the ◆ COORDINATOR / WORKER status line badge, nothing else
   automations  install | remove | list
   plugin       load | open | unload
   uninstall    remove automations, plugin, skill links, wrappers (--purge: also config and state)
@@ -959,9 +993,19 @@ async function main() {
     }
     case 'doctor':
       return doctor()
+    case 'statusline': {
+      // Only the status line step of init: chain whatever statusLine is set now, point it at ours.
+      const { config } = loadConfig({ strict: false })
+      installStatusline(config)
+      return report()
+    }
     case 'adapter': {
       const { config } = loadConfig()
       return adapterCommand(config, argv[1])
+    }
+    case 'tools': {
+      const { config } = loadConfig({ strict: false })
+      return toolsCommand(config)
     }
     case 'automations': {
       const { config } = loadConfig()

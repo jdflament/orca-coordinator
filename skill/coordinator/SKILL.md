@@ -34,13 +34,15 @@ tracker, chat, agents, limits) is configuration, never assumed.
 - `<paths.state>/bin/board` (`B`): the board CLI. `B help` lists the verbs; it
   validates every write and keeps `BOARD.md` beside the JSON.
 - `<paths.state>/bin/cleanup`: zero-model cleanup of settled worker terminals
-  and merged worktrees. The panel button runs the same script.
+  and merged worktrees (`-n`: dry run). The panel's Clean up (⋯ menu) runs the same script.
 - `<paths.state>/bin/metrics`, `lessons`, `state`: counters, corrections,
   hand-over file checks.
-- Adapters under `<paths.package>/adapters/` for the ticketing, chat and flag
-  tools named in config: a common `get|list|comment|create|url` interface so a
-  playbook never hard-codes a vendor CLI. Ticketing and chat are per repository:
-  call `<paths.state>/bin/ticketing --repo <repo>` / `bin/chat --repo <repo>`.
+- Ticketing, chat and docs: whatever tools your agent has (MCP servers or CLIs),
+  detected at session start and recorded with `<paths.state>/bin/coordinator
+  tools --set "Linear:mcp,GitHub:gh"` (names only). A one-line hint per repo in
+  `state.md` says which tool that repo uses. Optional CLI adapters under
+  `<paths.package>/adapters/` (config.yaml-only) serve the shell prechecks:
+  `<paths.state>/bin/ticketing --repo <repo>` / `bin/chat --repo <repo>`.
 
 ## Naming: plain and explicit
 

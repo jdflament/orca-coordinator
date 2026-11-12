@@ -1,25 +1,24 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "config.schema.json",
-  "title": "orca-coordinator config: repos and adapters",
-  "description": "The parts of config.yaml that carry ticketing and chat. Top-level adapters are the default; a repos[] entry may carry its own ticketing / chat block; a repository's own .orca-coordinator.yaml (at its root) wins over both. Other keys are checked in bin/lib/config.mjs.",
+  "title": "orca-coordinator config: repos and CLI adapters",
+  "description": "Optional, advanced, config.yaml-only. The coordinator detects its ticketing and chat tools itself (MCP servers, CLIs) and writes each item's own url; these blocks only feed the zero-model shell prechecks and adapters/*.sh, which cannot call MCP. Top-level adapters are the default; a repos[] entry may carry its own ticketing / chat block; a repository's own .orca-coordinator.yaml (at its root) wins over both. Other keys are checked in bin/lib/config.mjs.",
   "type": "object",
   "$defs": {
     "ticketing": {
       "type": "object",
-      "description": "A ticketing tool (adapters/ticketing/<kind>.sh).",
+      "description": "A ticketing CLI adapter (adapters/ticketing/<kind>.sh) for the shell prechecks. Optional.",
       "properties": {
         "kind": { "enum": ["linear", "jira", "github", "none"] },
-        "via": { "type": "string" },
         "team": { "type": "string" },
         "todoStates": { "type": "array", "items": { "type": "string" } },
         "childLabel": { "type": "string" },
-        "issueUrl": { "type": "string", "description": "UI link template with {id}; required when kind is not none." }
+        "issueUrl": { "type": "string", "description": "Optional link template with {id}, used only by the adapter's `url` verb. The panel links each item to its own url." }
       }
     },
     "chat": {
       "type": "object",
-      "description": "A chat tool (adapters/chat/<kind>.sh).",
+      "description": "A chat CLI adapter (adapters/chat/<kind>.sh) for the shell prechecks. Optional.",
       "properties": {
         "kind": { "enum": ["slack", "none"] },
         "via": { "type": "string" },

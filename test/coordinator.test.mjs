@@ -87,29 +87,6 @@ test('init --config writes that file and renders rules.local.md from its folder 
   assert.match(fs.readFileSync(path.join(box.state, 'bin', 'board'), 'utf8'), new RegExp(`ORCA_COORDINATOR_CONFIG='${custom}'`), 'wrappers find the same config')
 })
 
-test('init --statusline with no ~/.claude/settings.json creates it (bug 7)', () => {
-  const box = sandbox()
-  box.fake('orca', [anyOk({ repos: [], worktrees: [] })])
-  box.fake('gh', [{ match: [], stdout: 'alex' }])
-  const out = box.run(CLI, [...initArgs, '--statusline', '--coordinator-agent', 'claude'])
-  assert.equal(out.status, 0, out.err)
-  const settings = JSON.parse(fs.readFileSync(path.join(box.home, '.claude', 'settings.json'), 'utf8'))
-  assert.match(settings.statusLine.command, /bin\/statusline\.sh$/)
-})
-
-test('init --statusline leaves a settings.json it cannot parse untouched and reports it', () => {
-  const box = sandbox()
-  box.fake('orca', [anyOk({ repos: [], worktrees: [] })])
-  box.fake('gh', [{ match: [], stdout: 'alex' }])
-  const file = path.join(box.home, '.claude', 'settings.json')
-  fs.mkdirSync(path.dirname(file), { recursive: true })
-  fs.writeFileSync(file, '{ "permissions": { // hand edit\n')
-  const out = box.run(CLI, [...initArgs, '--statusline', '--coordinator-agent', 'claude'])
-  assert.notEqual(out.status, 0)
-  assert.match(out.out, /fail: .*settings\.json/)
-  assert.equal(fs.readFileSync(file, 'utf8'), '{ "permissions": { // hand edit\n')
-})
-
 // ---- render ----
 
 test('render: a local playbook override replaces the template, an .append.md is appended', () => {
@@ -302,6 +279,17 @@ test('automations install: a job removed from config is removed from Orca; autom
   assert.equal(box.run(CLI, ['automations', 'install']).status, 0)
   const removed = box.calls('orca').filter((a) => a[1] === 'remove').map((a) => a[2])
   assert.deepEqual(removed, ['old'])
+})
+
+test('automations install: a job turned off (enabled: false) removes its registered automation and creates nothing', () => {
+  const box = sandbox({ config: { automations: { jobs: [{ ...job('cleanup', '0 18 * * *'), enabled: false }, { ...job('eval-weekly', '0 9 * * 1'), enabled: false }] } } })
+  box.fake('orca', [
+    { match: ['automations', 'list'], stdout: ok({ automations: [{ id: 'a1', name: 'Job · cleanup', trigger: '0 18 * * *', prompt: '[trigger] cleanup' }] }) },
+    anyOk()
+  ])
+  const out = box.run(CLI, ['automations', 'install'])
+  assert.equal(out.status, 0, out.err)
+  assert.deepEqual(box.calls('orca').filter((a) => a[0] === 'automations' && a[1] !== 'list'), [['automations', 'remove', 'a1', '--json']])
 })
 
 // ---- plugin ----
