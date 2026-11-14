@@ -91,7 +91,7 @@
       .trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .meta-text { color: color-mix(in srgb, var(--muted) 70%, transparent); font-size: 11px; }
       .act { visibility: hidden; }
-      .row:hover .act, .wk:hover .act, .feature:hover .act, .wrow:hover .act, .act.keep { visibility: visible; }
+      .row:hover .act, .wk:hover .act, .feature:hover .act, .feature:focus-visible .act, .wrow:hover .act, .act.keep { visibility: visible; }
       /* Group header (repository): quiet, once per repo; clickable only when it has an action. */
       .grp { display: flex; align-items: center; gap: 8px; min-height: 20px; margin: 8px 8px 0; padding: 0 4px; border-radius: var(--radius-sm); min-width: 0; white-space: nowrap; }
       .grp .repo { max-width: 50%; }
@@ -109,9 +109,22 @@
       .item .top { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
       .item .verb { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
       .item .what { color: var(--muted); margin: 2px 0 6px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-      .feature { display: flex; align-items: center; gap: 8px; min-height: 24px; margin: 4px 8px 0; padding: 0 4px; white-space: nowrap; min-width: 0; }
-      .feature a { font-weight: 500; }
-      .bar { margin-left: auto; width: 48px; height: 3px; border-radius: 999px; overflow: hidden; background: var(--muted-bg); flex: none; }
+      /* A feature (workstream) is a section-level disclosure: chevron on the left, heavier text, full-width separator.
+         "Show done" below is a different, small muted text toggle: the two never look alike. */
+      .feature { display: flex; align-items: center; gap: 8px; min-height: 28px; margin: 4px 0 0; padding: 0 12px; border-top: 1px solid var(--line); font-weight: 600; white-space: nowrap; min-width: 0; outline: none; }
+      .feature:hover { background: var(--hover); color: var(--accent-fg); }
+      .feature:focus-visible { box-shadow: inset var(--focus); }
+      .feature a { font-weight: 600; }
+      .feature .chev { display: inline-flex; color: var(--muted); transition: transform 0.15s; }
+      .feature.open .chev { transform: rotate(90deg); }
+      .feature .counts { margin-left: auto; font-weight: 400; flex: 0 1 auto; }
+      .fnote { margin: 0 12px; padding: 2px 4px 4px 22px; }
+      .more { margin: 0 8px; padding: 2px 4px 2px 4px; color: var(--muted); font-size: 11px; width: fit-content; border-radius: var(--radius-sm); }
+      .more:hover { color: var(--fg); text-decoration: underline; }
+      @media (max-width: 320px) { .feature .bar { display: none; } }
+      h2 .all { margin-left: auto; font-weight: 400; text-transform: none; letter-spacing: 0; }
+      h2 .all:hover { color: var(--fg); text-decoration: underline; }
+      .bar { width: 32px; height: 3px; border-radius: 999px; overflow: hidden; background: var(--muted-bg); flex: none; }
       .bar i { display: block; height: 100%; border-radius: inherit; background: var(--green); }
       .note { color: color-mix(in srgb, var(--muted) 70%, transparent); font-size: 10px; }
       .muted { color: var(--muted); }
@@ -215,9 +228,9 @@
         chat: '<svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>',
         doc: '<svg viewBox="0 0 24 24"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>',
         retry: '<svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M8 16H3v5"/></svg>',
+        chev: '<svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>',
         gear: '<svg viewBox="0 0 24 24"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>'
       }
-      const DONE_STATES = ['merged', 'done']
       // Languages the coordinator writes drafts in: stored as the code, shown by their own name.
       const LANGUAGES = [['en', 'English'], ['fr', 'Français'], ['de', 'Deutsch'], ['es', 'Español'], ['it', 'Italiano'], ['pt', 'Português'], ['nl', 'Nederlands'], ['pl', 'Polski'], ['sv', 'Svenska'], ['tr', 'Türkçe'], ['uk', 'Українська'], ['ru', 'Русский'], ['ja', '日本語'], ['ko', '한국어'], ['zh', '中文']]
       const DONE_SHOWN = 15
@@ -243,6 +256,7 @@
         const prs = list(board.repos).map((repo) => ({ ...repo, pr: repo.pr ?? text(repo.name).replace('#', '') }))
         return [...list(board.tasks), ...prs]
       }
+      const DONE_STATES = ['merged', 'done']
       const canOpen = (url) => typeof url === 'string' && url !== ''
 
       // Entries (with a repo) grouped by repo in first-seen order. A repo with fewer than `min` entries stays
@@ -275,6 +289,31 @@
         }
         for (const work of list(board.localWork)) group(work.repo).local = work
         return [...groups.values()].sort((a, b) => Number(Boolean(a.repo)) - Number(Boolean(b.repo)))
+      }
+
+      // Features start closed, open when something in them is blocked or needs input; the viewer's own choice wins.
+      const ATTENTION = ['blocked', 'needs-input', 'needs input']
+      const FOLDS_KEY = 'coordinator.features'
+      function featureOpen(folds, id, items) {
+        return typeof folds[id] === 'boolean' ? folds[id] : items.some(({ item }) => ATTENTION.includes(item.status))
+      }
+      // "5 open · 1 blocked"; '' when nothing is open.
+      function featureCounts(items) {
+        const live = items.filter(({ item }) => !DONE_STATES.includes(item.status))
+        const n = (statuses) => live.filter(({ item }) => statuses.includes(item.status)).length
+        return [live.length ? live.length + ' open' : '', n(['blocked']) ? n(['blocked']) + ' blocked' : '', n(['needs-input', 'needs input']) ? n(['needs-input', 'needs input']) + ' needs input' : ''].filter(Boolean).join(' · ')
+      }
+      // Remembered per viewer; any storage failure (none, private mode, bad JSON) reads as "nothing remembered".
+      function loadFolds(storage) {
+        try {
+          const folds = JSON.parse(storage.getItem(FOLDS_KEY))
+          return folds && typeof folds === 'object' && !Array.isArray(folds) ? folds : {}
+        } catch {
+          return {}
+        }
+      }
+      function saveFolds(storage, folds) {
+        try { storage.setItem(FOLDS_KEY, JSON.stringify(folds)) } catch {}
       }
       // </pure>
 
@@ -471,7 +510,7 @@
         }
         refresh()
       }
-      const removeButton = (kind, id) => iconButton('x', 'Remove ' + id + ' from the board', () => removeItem(kind, id))
+      const removeButton = (kind, id) => iconButton('x', 'Remove ' + id + ' from the board', (event) => { event.stopPropagation(); removeItem(kind, id) })
       // A closed session cannot come back, so it asks first (one line) instead of offering Undo.
       function confirmClose(worker) {
         const node = byId('result')
@@ -486,12 +525,6 @@
           button('Cancel', () => node.replaceChildren(), 'inline')
         )
       }
-      function noteSpan(notes) {
-        const node = el('span', 'note trunc grow', notes)
-        node.title = text(notes)
-        return node
-      }
-
       function renderWorkRow({ item, tag }) {
         const nudge = item.status === 'blocked' ? iconButton('retry', 'Nudge ' + item.id, () => sendText('nudge ' + item.id)) : null
         // The item's own url (the coordinator writes it from the tool it used): the PR's when there is one, else the ticket's.
@@ -503,34 +536,72 @@
         return node
       }
 
-      function renderWorkGroup(header, items) {
+      // Open items, then a small "Show done" toggle for the finished ones.
+      function renderWorkGroup(items) {
         const open = items.filter(({ item }) => !DONE_STATES.includes(item.status))
         const done = items.filter(({ item }) => DONE_STATES.includes(item.status))
-        if (done.length === 0) return [header, ...open.map(renderWorkRow)]
-        const fold = el('details')
-        fold.append(el('summary', '', 'Done (' + done.length + ')'), ...done.slice(-DONE_SHOWN).reverse().map(renderWorkRow))
-        return [header, ...open.map(renderWorkRow), fold]
+        if (done.length === 0) return open.map(renderWorkRow)
+        const shown = done.slice(-DONE_SHOWN).reverse()
+        const rows = el('div')
+        rows.hidden = true
+        rows.append(...shown.map(renderWorkRow))
+        const more = el('div', 'more go', 'Show done (' + done.length + ')')
+        more.onclick = () => { rows.hidden = !rows.hidden; more.textContent = (rows.hidden ? 'Show' : 'Hide') + ' done (' + done.length + ')' }
+        return [...open.map(renderWorkRow), more, rows]
       }
 
-      function renderFeatureHeader(ws, items) {
+      let folds = loadFolds(browserStorage())
+      function browserStorage() {
+        try { return window.localStorage } catch { return null }
+      }
+      function setFolds(next) {
+        folds = next
+        saveFolds(browserStorage(), folds)
+      }
+      let lastBoard = null
+
+      // Feature = a collapsible group: chevron, name, counts, progress; its rows are the body.
+      function renderFeature(ws, items) {
+        const rows = items.map(({ item }) => item)
+        const open = featureOpen(folds, ws.id, items)
         const progress = typeof ws.progress === 'number' ? ws.progress
-          : items.length ? Math.round((100 * items.filter((item) => DONE_STATES.includes(item.status)).length) / items.length) : 0
-        const node = el('div', 'feature')
+          : rows.length ? Math.round((100 * rows.filter((item) => DONE_STATES.includes(item.status)).length) / rows.length) : 0
+        const head = el('div', 'feature go' + (open ? ' open' : ''))
+        head.setAttribute('role', 'button')
+        head.tabIndex = 0
+        head.setAttribute('aria-expanded', String(open))
+        const chevron = el('span', 'chev')
+        chevron.innerHTML = ICONS.chev
         const bar = el('div', 'bar')
         bar.title = progress + '%'
         bar.append(el('i'))
         bar.firstChild.style.width = progress + '%'
         const title = link(ws.title, ws.url, 'trunc', ws.linkHost)
         title.style.flex = '0 1 auto'
-        node.append(title, ...oncallBadge(ws), noteSpan(ws.notes), bar, removeButton('workstream', ws.id))
-        return node
+        // A link in the header opens its url; the rest of the header folds.
+        title.addEventListener('click', (event) => event.stopPropagation())
+        head.append(chevron, title, ...oncallBadge(ws), el('span', 'counts meta-text trunc', featureCounts(items)), bar, removeButton('workstream', ws.id))
+        const body = el('div')
+        body.hidden = !open
+        if (text(ws.notes)) body.append(el('div', 'fnote note trunc', ws.notes))
+        body.append(...renderWorkGroup(items))
+        const toggle = () => {
+          const next = body.hidden
+          body.hidden = !next
+          head.classList.toggle('open', next)
+          head.setAttribute('aria-expanded', String(next))
+          setFolds({ ...folds, [ws.id]: next })
+        }
+        head.onclick = toggle
+        head.onkeydown = (event) => { if (event.target === head && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); toggle() } }
+        return [head, body]
       }
 
       // Repository > workstream > item. The repo header is the local-changes summary and opens Source Control.
       function renderWork(plan) {
         return plan.flatMap((group) => [
           ...(group.repo ? [renderRepoHeader(group)] : []),
-          ...group.streams.flatMap(({ ws, items }) => renderWorkGroup(renderFeatureHeader(ws, items.map(({ item }) => item)), items))
+          ...group.streams.flatMap(({ ws, items }) => renderFeature(ws, items))
         ])
       }
 
@@ -584,7 +655,16 @@
         const open = planned.filter((item) => !DONE_STATES.includes(item.status)).length
         const blocked = planned.filter((item) => item.status === 'blocked').length
         byId('needs').replaceChildren(...section('Needs you', renderNeeds(pending), pending.length ? String(pending.length) : ''))
-        byId('work').replaceChildren(...section('Work', renderWork(plan), [open ? open + ' open' : '', blocked ? blocked + ' blocked' : ''].filter(Boolean).join(' · '), 'No work yet.'))
+        lastBoard = board
+        const streams = plan.flatMap((group) => group.streams)
+        const work = section('Work', renderWork(plan), [open ? open + ' open' : '', blocked ? blocked + ' blocked' : ''].filter(Boolean).join(' · '), 'No work yet.')
+        if (streams.length > 3) {
+          const allOpen = streams.every(({ ws, items }) => featureOpen(folds, ws.id, items))
+          const all = el('span', 'all go', allOpen ? 'Collapse all' : 'Expand all')
+          all.onclick = () => { setFolds(Object.fromEntries(streams.map(({ ws }) => [ws.id, !allOpen]))); render(lastBoard) }
+          work[0].append(all)
+        }
+        byId('work').replaceChildren(...work)
         byId('agents').replaceChildren(...linkHeading(section('Agents', renderAgents(agents, workers), busy ? busy + ' working' : '', 'No agents.'), 'Open the Workspace Board', openBoard))
       }
 
