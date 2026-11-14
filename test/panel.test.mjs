@@ -131,19 +131,35 @@ test('featureOpen: the viewer\'s remembered choice wins over the default, both w
   assert.equal(featureOpen({ W1: 'yes' }, 'W1', [entry('working')]), false, 'a non-boolean value is ignored')
 })
 
-test('folds are saved and read back per feature, other keys kept', () => {
-  const storage = memoryStorage()
-  saveFolds(storage, { W1: true, W2: false })
-  assert.deepEqual(plain(loadFolds(storage)), { W1: true, W2: false })
+const plainStorage = (initial = {}) => {
+  const data = new Map(Object.entries(initial))
+  return { data, async get(key) { return data.has(key) ? data.get(key) : null }, async set(key, value) { data.set(key, value) } }
+}
+
+test('folds are saved to the plugin storage and read back, without touching localStorage', async () => {
+  const storage = plainStorage()
+  await saveFolds(storage, { W1: true, W2: false })
+  assert.deepEqual(plain(await loadFolds(storage, memoryStorage())), { W1: true, W2: false })
 })
 
-test('folds: no storage, throwing storage or garbage in it still work (nothing remembered)', () => {
-  assert.deepEqual(plain(loadFolds(null)), {})
-  const throwing = { getItem() { throw new Error('blocked') }, setItem() { throw new Error('full') } }
-  assert.deepEqual(plain(loadFolds(throwing)), {})
-  assert.doesNotThrow(() => saveFolds(throwing, { W1: true }))
-  assert.doesNotThrow(() => saveFolds(null, { W1: true }))
-  for (const garbage of ['not json', '[1,2]', '"x"', 'null']) assert.deepEqual(plain(loadFolds(memoryStorage(garbage))), {})
+test('folds: a localStorage value from an older version is copied to the plugin storage once, and storage wins afterwards', async () => {
+  const storage = plainStorage()
+  const legacy = memoryStorage('{"W1":true,"W2":false}')
+  assert.deepEqual(plain(await loadFolds(storage, legacy)), { W1: true, W2: false }, 'folds survive the upgrade')
+  assert.deepEqual(plain(storage.data.get('coordinator.features')), { W1: true, W2: false }, 'copied to storage')
+  await saveFolds(storage, { W1: false })
+  assert.deepEqual(plain(await loadFolds(storage, legacy)), { W1: false }, 'the old localStorage is not read again')
+})
+
+test('folds: no storage, failing storage or garbage still work (nothing remembered)', async () => {
+  const failing = { async get() { throw new Error('denied') }, async set() { throw new Error('denied') } }
+  assert.deepEqual(plain(await loadFolds(undefined, null)), {})
+  assert.deepEqual(plain(await loadFolds(failing, null)), {})
+  assert.deepEqual(plain(await loadFolds(failing, memoryStorage('{"W1":true}'))), { W1: true }, 'legacy value still read when storage fails')
+  await assert.doesNotReject(saveFolds(failing, { W1: true }))
+  await assert.doesNotReject(saveFolds(undefined, { W1: true }))
+  for (const garbage of ['not json', '[1,2]', '"x"', 'null']) assert.deepEqual(plain(await loadFolds(plainStorage(), memoryStorage(garbage))), {})
+  assert.deepEqual(plain(await loadFolds(plainStorage({ 'coordinator.features': [1] }), null)), {}, 'a stored non-object is ignored')
 })
 
 test('featureCounts: open, blocked and needs-input; done items are not open', () => {

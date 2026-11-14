@@ -307,22 +307,28 @@ note to call the script from their own status-line hook.
 ## What the plugin runs
 
 The plugin worker uses Orca's plugin host API when this Orca offers the method (`orca.host.has`),
-and the `orca` CLI otherwise (`plugin/src/host.ts`). Today the host API covers the project list
-(`project.list`, Orca 1.4.258+). Capabilities are declared for what the plugin does, CLI or not:
-`terminal:send` (panel clicks typed into the coordinator terminal), `agent:read`,
-`workspace:read` / `workspace:write`, `settings:own`. `automation:read` / `automation:write`
-(`orca-coordinator init` manages automations) are not declared: Orca 1.4.257's manifest
-validator refuses them; add them when `engines.orca` moves to the release that knows them.
+and the `orca` CLI otherwise (`plugin/src/host.ts`). A failing host call is an error naming the
+method; it is not silently retried through the CLI. Host API (Orca 1.4.258+): `project.list`,
+`terminal.list` + `terminal.sendText` (panel clicks typed into the coordinator terminal),
+`terminal.focus` (the panel's terminal button), `agents.list` (agent kinds, and `task.title` for the
+WORKER titles). Capabilities are declared for what the plugin does: `terminal:send`, `agent:read`,
+`workspace:read` / `workspace:write`, `settings:own`, `storage:own` (the panel's fold state).
+`automation:read` / `automation:write` are not declared (see Automations below).
 
 What still goes through the `orca` CLI, and what would let it switch:
 
-- Terminals by handle (`terminal list` / `show` / `send` / `switch`, `orchestration worker-list` /
-  `task-list`): the coordinator, workers and the status line all use the `term_…` handle. Switch
-  when Orca documents how a `term_` handle maps to the host `terminalId` (`terminal.list`,
-  `terminal.focus`, `terminal.sendText`, `agents.list`, whose `task.title` could then feed the
-  WORKER file).
+- Terminal handles (`terminal list` / `show`, `orchestration worker-list` / `task-list`): the
+  coordinator, workers and the status line use the `term_…` handle; the host API names terminals by
+  its own `terminalId` and documents no mapping. The worker maps a handle to a host id through
+  `terminal.list` (same workspace, same id or one matching title) and uses the CLI when no single
+  terminal matches. A `terminal.list` row carrying the handle would remove the guess.
+- Closing a worker (`orchestration worker-release`): it also ends the dispatch; `terminal.close`
+  only works for the focused workspace's terminals or ones the plugin opened, and leaves the
+  dispatch listed.
 - Automations (`automations list/create/edit/remove`): run by `orca-coordinator init`, a node
-  script, which cannot call the worker-only host API. Switch when scripts can reach `automation.*`.
+  script that cannot call the worker-only host API, and `automation.create` has no precheck,
+  reuse-session or missed-run-grace parameter, which these jobs rely on (the precheck keeps an idle
+  run from starting an agent). Switch when Orca adds those and scripts can reach `automation.*`.
 - `agent launch`, `file open-changed`: start the coordinator, open a repo's changes (fallbacks
   when the host API is refused).
 - `orchestration worker-start`, `worktree`, `terminal rename`, `repo list`: run by the

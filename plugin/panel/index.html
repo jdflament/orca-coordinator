@@ -323,17 +323,23 @@
         const n = (statuses) => live.filter(({ item }) => statuses.includes(item.status)).length
         return [live.length ? live.length + ' open' : '', n(['blocked']) ? n(['blocked']) + ' blocked' : '', n(['needs-input', 'needs input']) ? n(['needs-input', 'needs input']) + ' needs input' : ''].filter(Boolean).join(' · ')
       }
-      // Remembered per viewer; any storage failure (none, private mode, bad JSON) reads as "nothing remembered".
-      function loadFolds(storage) {
+      // Fold choices live in the plugin's own storage (storage:own), shared by every panel of this plugin. A value left in
+      // the old browser localStorage is copied over once, when storage has none yet; the old value is left as it is.
+      // Any failure (no storage, bad JSON, wrong type) reads as "nothing remembered".
+      const isFolds = (value) => Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+      async function loadFolds(storage, legacy) {
         try {
-          const folds = JSON.parse(storage.getItem(FOLDS_KEY))
-          return folds && typeof folds === 'object' && !Array.isArray(folds) ? folds : {}
-        } catch {
-          return {}
-        }
+          const stored = await storage.get(FOLDS_KEY)
+          if (isFolds(stored)) return stored
+        } catch {}
+        let old = null
+        try { old = JSON.parse(legacy.getItem(FOLDS_KEY)) } catch {}
+        if (!isFolds(old)) return {}
+        try { await storage.set(FOLDS_KEY, old) } catch {}
+        return old
       }
-      function saveFolds(storage, folds) {
-        try { storage.setItem(FOLDS_KEY, JSON.stringify(folds)) } catch {}
+      async function saveFolds(storage, folds) {
+        try { await storage.set(FOLDS_KEY, folds) } catch {}
       }
       // </pure>
 
@@ -570,15 +576,19 @@
         return [...open.map(renderWorkRow), more, rows]
       }
 
-      let folds = loadFolds(browserStorage())
-      function browserStorage() {
+      let folds = {}
+      let lastBoard = null
+      function legacyStorage() {
         try { return window.localStorage } catch { return null }
       }
+      void loadFolds(orca.storage, legacyStorage()).then((saved) => {
+        folds = saved
+        if (lastBoard) render(lastBoard)
+      })
       function setFolds(next) {
         folds = next
-        saveFolds(browserStorage(), folds)
+        void saveFolds(orca.storage, folds)
       }
-      let lastBoard = null
 
       // Feature = a collapsible group: chevron, name, counts, progress; its rows are the body.
       function renderFeature(ws, items) {
