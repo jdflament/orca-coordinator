@@ -850,20 +850,24 @@
       }
 
       async function refresh() {
+        let step = 'Could not load the board: '
         try {
           if (settingsOpen) return
           if (configured !== true) {
+            step = 'Could not check the setup: '
             // The setup form is filled in by hand: the periodic refresh must not wipe it.
             if (setupShown && !byId('setup').hidden) return
             const status = await orca.plugin.request('setup.status')
             configured = status?.configured === true
             if (!configured) return renderSetup(status || {})
             showSetup(false)
+            step = 'Could not load the board: '
           }
-          const board = await orca.plugin.request('board.get', { seen: seenNeeds ? [...seenNeeds] : undefined })
+          // Host request input is JSON: an `undefined` value (the first load has no `seen`) is refused as "input: Invalid input".
+          const board = await orca.plugin.request('board.get', seenNeeds ? { seen: [...seenNeeds] } : {})
           render(board && typeof board === 'object' ? board : {})
         } catch (error) {
-          byId('updated').textContent = 'error: ' + error.message
+          byId('updated').textContent = step + error.message
         }
       }
 
