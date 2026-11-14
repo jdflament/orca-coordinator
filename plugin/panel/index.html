@@ -60,6 +60,9 @@
       .result .actions-list { margin-top: 2px; font-size: 11px; }
       .result > button { position: absolute; right: 6px; top: 4px; }
 
+      .notice { display: flex; gap: 8px; align-items: center; padding: 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
+      .notice span { flex: 1; min-width: 0; }
+
       .focus { color: var(--muted); padding: 8px 12px 0; }
       .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
       .stat { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -171,7 +174,7 @@
       <header><span id="dot" class="dot"></span><strong>Coordinator</strong><span id="updated" class="meta">loading</span><button id="start" class="primary" hidden>Start coordinator</button><button id="more" class="icon" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"></button><div id="more-menu" class="menu" role="menu" hidden><button id="cleanup" role="menuitem" title="Shows what it would close and remove first; nothing changes until you confirm">Clean up finished workers…</button></div><button id="open" class="icon" title="Open coordinator"></button><button id="gear" class="icon" title="Settings" hidden></button></header>
       <div id="plan" class="plan" hidden></div>
       <div id="result" class="result"></div>
-      <div id="links" class="result" hidden></div>
+      <div id="links" class="notice" hidden></div>
       <section id="setup" class="setup" hidden></section>
       <section id="settings" class="settings" hidden></section>
       <div id="board">
@@ -494,7 +497,7 @@
           }
           void refresh()
         })
-        node.replaceChildren(el('span', 'trunc', 'The coordinator skill link is out of date: ' + stale.join(', ')), update)
+        node.replaceChildren(el('span', '', 'Skill link out of date: ' + stale.join(', ')), update)
       }
 
       function showResult(message, actions, isError) {
