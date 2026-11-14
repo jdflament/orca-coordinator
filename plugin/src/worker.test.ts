@@ -846,6 +846,7 @@ test('board.get writes worker-terminals for the status line: each worker termina
     { dispatchId: 'd', state: 'running', terminal: 'bad handle; rm', taskId: 't4' },
     { dispatchId: 'e', state: 'succeeded', terminal: null, taskId: 't5' }
   ])
+})
 
 // board.remove / board.restore: the real bin/board.mjs edits board.json; no other file changes.
 const BOARD_CLI = new URL('../../bin/board.mjs', import.meta.url).pathname
