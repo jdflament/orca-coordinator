@@ -4,6 +4,8 @@ A coordinator setup for agent-driven work on [Orca](https://orca.sh): **you talk
 agent, the coordinator; it dispatches Orca workers, judges what they bring back, keeps a
 board you can act on with one click, and asks you only for the decisions that are yours.**
 
+**Mission:** coordinate many agents at once. Split the human's request into independent tasks and run them in parallel workers, each in its own worktree and branch when they touch the same repo. Handle shared code by rebasing later instead of waiting. Keep every worker moving, judge their results, and bring the human only what needs them. Never do the work yourself; never serialise tasks that could run together.
+
 Everything about *you* (name, repos, agents, limits) is one config file; ticketing and chat
 tools are whatever your agent already has. Nothing in the package assumes a folder layout, a
 company or a tool.
@@ -30,8 +32,7 @@ Three folds:
 - An agent Orca can launch for the coordinator and for workers (Claude Code, Codex,
   OpenCode, …) that supports skills, or whose system prompt you can paste into.
 - Optional: the CLI of your tracker (`orca linear` is built into Orca; `jira` for Jira),
-  a chat credential or MCP tool, a feature-flag API credential in your keychain, `sqlite3`
-  (macOS ships it) for the WORKER status-line badge.
+  a chat credential or MCP tool, or a feature-flag API credential in your keychain.
 
 ## Install
 
@@ -274,18 +275,35 @@ terminal Orca dispatched a worker to, and nothing in any other session. The prev
 `statusLine` command (Orca's, say) is saved in `<state>/statusline-chain` and still runs
 first, so its line stays; `uninstall` puts it back.
 
-Orca sets no environment variable for dispatched workers, so the WORKER signal is read from
-Orca's own orchestration database: one read-only `sqlite3` query on
-`~/Library/Application Support/orca/orchestration.db` (`$ORCA_USER_DATA_PATH`, or
-`$ORCA_ORCHESTRATION_DB` for the file itself), table `dispatch_contexts`, columns
-`assignee_handle` and `creator_handle`. **This depends on Orca's internal schema**: if a
-future Orca renames them, or `sqlite3` or the file is missing, the WORKER badge silently
-disappears (never an error; ◆ COORDINATOR does not use the database).
+Orca sets no environment variable for dispatched workers, so the plugin keeps the signal
+itself: every time the panel refreshes, its worker writes the terminals of the workers Orca
+lists to `<state>/worker-terminals` (one handle per line), and the script only reads that
+file. No file (the plugin is not running) means no WORKER badge, never an error.
+
+The previous command in `statusline-chain` is run without a shell: its words are split on
+whitespace and a leading `~` is expanded. A command that needs shell syntax (quotes, pipes,
+variables, `;`) is not run; the badge still shows.
 
 Orca leaves a user `statusLine` alone, but another tool may replace it: `orca-coordinator
 doctor` reports when it no longer points at the script, and `orca-coordinator statusline`
 re-chains it (that step only: no render, no plugin or automation changes). Other agents get a
 note to call the script from their own status-line hook.
+
+## What the plugin runs
+
+The plugin worker uses Orca's plugin host API when this Orca offers the method (`orca.host.has`),
+and the `orca` CLI otherwise (`plugin/src/host.ts`). Today the host API covers the project list
+(`project.list`, Orca 1.4.258+). What still goes through the `orca` CLI, and why:
+
+- `orchestration worker-list` / `task-list`, `terminal list` / `show`: the live workers, their
+  titles and whether the coordinator terminal runs an agent. The host API's terminal ids are not
+  the `term_…` handles Orca gives dispatched workers and their status line.
+- `terminal send` / `switch`: talk to the coordinator terminal by its handle.
+- `agent launch`, `file open-changed`: start the coordinator, open a repo's changes (fallbacks
+  when the host API is refused).
+- `orchestration worker-start`, `worktree`, `terminal rename`, `automations`, `repo list`: run by
+  the coordinator's rules, playbooks and `orca-coordinator init`, not by the panel.
+- `plugin list` / `inspect` / `install`: `orca-coordinator init` and `doctor`.
 
 ## Self-improvement loop
 

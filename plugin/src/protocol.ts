@@ -227,11 +227,6 @@ declare module 'orca' {
     /** Runs <coordinatorDir>/bin/cleanup (dryRun: with -n, changing nothing) and returns its summary line and actions. */
     'board.cleanup': { input: { dryRun?: boolean }; output: CleanupResult }
     /**
-     * Orca's own Geist (renderer/assets/Geist-*.woff2), base64, in parts that fit the 64 KB panel
-     * message cap; parts: 0 when Orca has none (the panel keeps its system-font fallback).
-     */
-    'panel.font': { input: { part: number }; output: { family: string; data: string; parts: number } }
-    /**
      * Shows a configured repo's changes natively: its workspace + Source Control (needs
      * workspace:write), else `orca file open-changed --mode diff`. Rejects an unknown repo.
      */

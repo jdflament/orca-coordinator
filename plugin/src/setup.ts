@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { ConfigPatch, ConfigRepo, ConfigRead, ConfigSave, CoordinatorSettings, SetupOptions, SetupRepo, SetupStatus, SetupWorkspace } from './protocol'
+import { listProjects, type Host } from './host'
 
 /** This plugin's root: src/ → plugin/ → the package. */
 export const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -161,17 +162,16 @@ async function init(node: string, args: string[]): Promise<{ ok: boolean; output
 
 type Orca = (args: string[]) => Promise<string>
 
-/** Orca's repos and folders, as `orca repo list` gives them. */
-export async function listOrcaRepos(orca: Orca): Promise<SetupRepo[]> {
-  const response = JSON.parse(await orca(['repo', 'list', '--json'])) as { result?: { repos?: { id?: string; path?: string; displayName?: string; kind?: string }[] } }
-  return (response.result?.repos ?? [])
+/** Orca's repos and folders (host API `project.list`, else `orca repo list`). */
+export async function listOrcaRepos(orca: Orca, host: Host | null = null): Promise<SetupRepo[]> {
+  return (await listProjects(host, orca))
     .filter((repo) => repo.path)
     .map((repo) => ({ id: String(repo.id ?? ''), path: String(repo.path), name: repo.displayName || path.basename(String(repo.path)), folder: repo.kind !== undefined && repo.kind !== 'git' }))
 }
 
 /** Orca's git repositories (kind "git"), each confirmed by git: never a plain folder. */
-export async function listGitRepos(orca: Orca): Promise<SetupRepo[]> {
-  return onlyGitRepos((await listOrcaRepos(orca)).filter((repo) => !repo.folder))
+export async function listGitRepos(orca: Orca, host: Host | null = null): Promise<SetupRepo[]> {
+  return onlyGitRepos((await listOrcaRepos(orca, host)).filter((repo) => !repo.folder))
 }
 
 /** Where the coordinator can live: the default first (the first folder, else the shortest path), then the rest by path length. */
@@ -183,8 +183,8 @@ export function listWorkspaces(repos: SetupRepo[]): SetupWorkspace[] {
     .map((repo) => ({ path: repo.path, name: repo.path.startsWith(home + '/') ? '~' + repo.path.slice(home.length) : repo.path }))
 }
 
-export async function getSetupStatus(orca: Orca): Promise<SetupStatus> {
-  const [node, repos, personName] = await Promise.all([findNode(), listOrcaRepos(orca).catch(() => [] as SetupRepo[]), gitUserName()])
+export async function getSetupStatus(orca: Orca, host: Host | null = null): Promise<SetupStatus> {
+  const [node, repos, personName] = await Promise.all([findNode(), listOrcaRepos(orca, host).catch(() => [] as SetupRepo[]), gitUserName()])
   return {
     configured: await isConfigValid(node),
     version: versionOf(PACKAGE_DIR),
@@ -249,9 +249,9 @@ function coordinatorCli(config: CoordinatorSettings | null): string {
 }
 
 /** What the settings view shows: the merged config (defaults filled), its problems, and the choices. */
-export async function readSettings(orca: Orca): Promise<ConfigRead> {
+export async function readSettings(orca: Orca, host: Host | null = null): Promise<ConfigRead> {
   const base = { path: configFile(), skippedRepos: [] as ConfigRepo[] }
-  const repos = await listGitRepos(orca).catch(() => [] as SetupRepo[])
+  const repos = await listGitRepos(orca, host).catch(() => [] as SetupRepo[])
   if (!existsSync(configFile())) return { ...base, repos, config: null, problems: [`no config at ${configFile()}: set the coordinator up first`] }
   const node = await findNode()
   if (!node) return { ...base, repos, config: null, problems: [NO_NODE] }

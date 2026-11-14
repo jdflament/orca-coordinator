@@ -307,3 +307,20 @@ test('plugin load: a failed install leaves no "installed by this package" marker
   assert.match(out.out, /fail: plugin install: manifest invalid/)
   assert.ok(!fs.existsSync(path.join(box.state, 'plugin-folder')))
 })
+
+// ---- which(): PATH search without a shell ----
+
+test('doctor finds a tool in a PATH folder with spaces and quotes, skips a non-executable file, and never runs a shell', () => {
+  const box = sandbox()
+  box.fake('orca', [anyOk({ automations: [], plugins: [] })])
+  const odd = path.join(box.dir, `my "tools" $HOME`)
+  const plain = path.join(box.dir, 'plain bin')
+  fs.mkdirSync(odd, { recursive: true })
+  fs.mkdirSync(plain)
+  fs.writeFileSync(path.join(odd, 'jq'), '#!/bin/sh\n', { mode: 0o755 })
+  fs.writeFileSync(path.join(plain, 'jq'), 'not executable', { mode: 0o644 })
+  const out = box.run(CLI, ['doctor'], { extraEnv: { PATH: `${plain}:${odd}:${box.env.PATH}` } })
+  assert.match(out.out, new RegExp(`✓ jq: ${odd.replace(/[$"]/g, '\\$&')}/jq`), 'the executable one is found, the non-executable earlier entry is skipped')
+  const none = box.run(CLI, ['doctor'], { extraEnv: { PATH: plain } })
+  assert.match(none.out, /✗ jq: not on PATH/)
+})

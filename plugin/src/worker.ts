@@ -4,7 +4,7 @@
 // is set up, it offers the setup instead (see setup.ts).
 import { execFile } from 'node:child_process'
 import { appendFileSync, mkdirSync } from 'node:fs'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { Board, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
@@ -72,8 +72,20 @@ async function listWorkers(): Promise<{ workers: OrcaWorker[]; titleOf: (worker:
     getTaskTitles().catch(() => new Map<string, string>())
   ])
   const workers = (response.result?.workers ?? []) as OrcaWorker[]
+  await writeWorkerTerminals(workers).catch(() => undefined)
   const titleOf = (worker: OrcaWorker): string => taskTitles.get(String(worker.taskId)) || terminalTitles.get(String(worker.terminal)) || String(worker.taskId ?? 'worker')
   return { workers, titleOf }
+}
+
+/**
+ * The terminals Orca dispatched workers to, one handle per line in <state>/worker-terminals:
+ * bin/statusline.sh reads it for the WORKER badge (it never reads Orca's files).
+ */
+async function writeWorkerTerminals(workers: OrcaWorker[]): Promise<void> {
+  const file = path.join(await stateDir(), 'worker-terminals')
+  const handles = [...new Set(workers.map((worker) => worker.terminal).filter((handle): handle is string => /^[A-Za-z0-9_-]+$/.test(handle ?? '')))]
+  const text = handles.map((handle) => handle + '\n').join('')
+  if ((await readFile(file, 'utf8').catch(() => null)) !== text) await writeFile(file, text)
 }
 
 function getActiveWorkers({ workers, titleOf }: Awaited<ReturnType<typeof listWorkers>>): LiveWorker[] {
@@ -271,7 +283,7 @@ async function startCoordinator(): Promise<{ started: boolean; output: string }>
 async function openRepoChanges(name: string): Promise<{ opened: boolean; via: 'source-control' | 'cli' }> {
   const repo = ((await getConfig())?.repos ?? []).find((r) => r.name === name && r.path)
   if (!repo) throw Object.assign(new Error(`unknown repo: ${name}`), { code: 'invalid_params' })
-  const orcaRepo = (await listOrcaRepos(runOrca).catch(() => [])).find((r) => r.id && path.resolve(r.path) === path.resolve(repo.path))
+  const orcaRepo = (await listOrcaRepos(runOrca, host).catch(() => [])).find((r) => r.id && path.resolve(r.path) === path.resolve(repo.path))
   if (orcaRepo && host) {
     try {
       await host.call('workspace.open', { workspaceId: `${orcaRepo.id}::${orcaRepo.path}` })
@@ -295,65 +307,20 @@ async function openWorkspaceBoard(): Promise<{ opened: boolean; error?: string }
   }
 }
 
-// ---- Orca's UI font for the panel ----
-
-const FONT_CHUNK = 45000 // base64 chars per part: well under the 64 KB panel message cap
-const FONT_MAX_BYTES = 200 * 1024
-const NO_FONT = { family: '', data: '', parts: 0 }
-
-/** Orca's renderer assets: $ORCA_COORDINATOR_FONT_DIR (tests), else the running app's, else the macOS app's. */
-function fontDirs(): string[] {
-  if (process.env.ORCA_COORDINATOR_FONT_DIR) return [process.env.ORCA_COORDINATOR_FONT_DIR]
-  const resources = (process as { resourcesPath?: string }).resourcesPath
-  return [
-    resources ? path.join(resources, 'app.asar.unpacked', 'out', 'renderer', 'assets') : '',
-    '/Applications/Orca.app/Contents/Resources/app.asar.unpacked/out/renderer/assets'
-  ].filter(Boolean)
-}
-
-let fontCache: { key: string; data: string } | null = null
-
-async function readGeist(): Promise<string> {
-  for (const dir of fontDirs()) {
-    const name = (await readdir(dir).catch(() => [] as string[])).find((file) => /^Geist-.*\.woff2$/.test(file))
-    if (!name) continue
-    const file = path.join(dir, name)
-    const info = await stat(file).catch(() => null)
-    if (!info) return ''
-    const key = `${file}:${info.size}:${info.mtimeMs}`
-    if (fontCache?.key === key) return fontCache.data
-    const bytes = info.size <= FONT_MAX_BYTES ? await readFile(file).catch(() => null) : null
-    // A WOFF2 file starts with "wOF2"; anything else, or a file too big for the panel, is ignored.
-    const data = bytes && bytes.subarray(0, 4).toString('latin1') === 'wOF2' ? bytes.toString('base64') : ''
-    fontCache = { key, data }
-    return data
-  }
-  return ''
-}
-
-async function getFontPart(part: number): Promise<{ family: string; data: string; parts: number }> {
-  const data = await readGeist().catch(() => '')
-  if (!data) return NO_FONT
-  const parts = Math.ceil(data.length / FONT_CHUNK)
-  const index = Number.isInteger(part) && part >= 0 && part < parts ? part : 0
-  return { family: 'Geist', data: data.slice(index * FONT_CHUNK, (index + 1) * FONT_CHUNK), parts }
-}
-
 export default function activate(orca: OrcaWorkerApi): void {
   settings = orca.settings
   host = orca.host
   // Orca installed a new version of the plugin: bring the coordinator package up to date with it.
   void updateIfInstalledHere().catch(() => undefined)
 
-  orca.panels.handle('setup.status', () => getSetupStatus(runOrca))
+  orca.panels.handle('setup.status', () => getSetupStatus(runOrca, host))
   orca.panels.handle('setup.run', (options) => runSetup(options ?? { workspace: '' }))
   orca.panels.handle('setup.start', () => startCoordinator())
-  orca.panels.handle('config.read', () => readSettings(runOrca))
+  orca.panels.handle('config.read', () => readSettings(runOrca, host))
   orca.panels.handle('config.save', ({ patch }) => saveSettings(patch))
   orca.panels.handle('config.removeRepo', ({ path: target }) => removeSkippedRepo(String(target ?? '')))
 
   orca.panels.handle('board.get', () => getBoard())
-  orca.panels.handle('panel.font', ({ part }) => getFontPart(Number(part)))
   orca.panels.handle('work.openChanges', ({ repo }) => openRepoChanges(String(repo ?? '')))
   orca.panels.handle('agents.openBoard', () => openWorkspaceBoard())
 

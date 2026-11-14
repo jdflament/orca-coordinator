@@ -25,7 +25,7 @@ runtime state). `cfg.x` names a key in `config.yaml`.
 | Panel clicks: `terminal send "<option> <id>"` to the live coordinator; `inbox.jsonl` fallback when it is offline | `plugin/src/worker.ts`, `bin/board.mjs inbox` | — | plugin setting `coordinatorDir` |
 | Oncall badge | panel, schema, `board.mjs --oncall` | — | `board.oncallLabel` |
 | Cleanup script (zero model) + panel ⋯ menu item: dry-run preview, then Confirm, then a feedback line | `bin/cleanup.sh` (`-n`), plugin handler `board.cleanup` | — | `paths.worktreeRoot` |
-| Status line ◆ COORDINATOR / WORKER (WORKER read from Orca's `orchestration.db`, table `dispatch_contexts`: depends on Orca's internal schema) | `bin/statusline.sh` | `~/.claude/settings.json` by `init --statusline` or `orca-coordinator statusline`; previous command in `<state>/statusline-chain` | `agents.coordinator.statusline` |
+| Status line ◆ COORDINATOR / WORKER (WORKER read from the plugin's own `<state>/worker-terminals`) | `bin/statusline.sh` | `~/.claude/settings.json` by `init --statusline` or `orca-coordinator statusline`; previous command in `<state>/statusline-chain` | `agents.coordinator.statusline` |
 | Worker self-identification footer in every spec, ◆ tab title | `rules/10-session.md`, `playbooks/_preamble.md` | — | `person.name` |
 | Drafts: the human's language and tone, UI terms kept, never post, no "I recommend" in text they post, ≤2 proof links | `rules/40-decisions.md` | `person.voiceFile` | `person.*` |
 | Planning: every named repo, show cuts, one ticket per repo per feature, 5-line plan | `rules/50-planning-tracker.md` | — | `git.*` |

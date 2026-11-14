@@ -125,9 +125,19 @@ function orca(config, args, { json = true } = {}) {
   }
 }
 
+/** The first executable file named `bin` on PATH, found without a shell; '' when there is none. */
 function which(bin) {
-  const result = spawnSync('sh', ['-c', `command -v ${JSON.stringify(bin)}`], { encoding: 'utf8' })
-  return result.status === 0 ? result.stdout.trim() : ''
+  for (const dir of (process.env.PATH || '').split(path.delimiter).filter(Boolean)) {
+    const file = path.join(dir, bin)
+    try {
+      if (!fs.statSync(file).isFile()) continue
+      fs.accessSync(file, fs.constants.X_OK)
+      return file
+    } catch {
+      // not here
+    }
+  }
+  return ''
 }
 
 function today() {
