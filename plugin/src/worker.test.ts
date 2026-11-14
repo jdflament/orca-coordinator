@@ -1088,86 +1088,54 @@ test('board.get canStart: Start coordinator shows only when set up and not runni
   })
 })
 
-/** A fake agent CLI on PATH: `<name> models` prints `output` (or fails when null). */
-async function withFakeAgent<T>(name: string, output: string | null, run: () => Promise<T>): Promise<T> {
-  const bin = mkdtempSync(join(tmpdir(), 'fake-agent-'))
-  writeFileSync(join(bin, name), output === null ? '#!/bin/sh\nexit 1\n' : `#!/bin/sh\n[ "$1" = models ] && printf '%s\\n' ${output}\n`)
-  chmodSync(join(bin, name), 0o755)
-  const previous = process.env.PATH
-  process.env.PATH = `${bin}:${previous}`
-  try {
-    return await run()
-  } finally {
-    process.env.PATH = previous
-  }
-}
+/** The coordinator's launches in the fake Orca's log, as argument lines. */
+const launchLines = (log: string) => readFileSync(log, 'utf8').split('\n').filter((l) => l.startsWith('agent launch'))
 
-test('config.read: models come from the agent\'s own list with best / medium / lowest defaults; no models command uses the agent preset, else free text', async () => {
+test('config.read: roles default to Balanced (Max / Standard / Light), levels have no ids, and no model name comes from the plugin', async () => {
   await withHome(async (home) => {
     await withFakeOrca(false, async () => {
       writeConfig(home)
       const worker = await mount(home)
-      await withFakeAgent('claude', 'opus-9 sonnet-9 haiku-9', async () => {
-        const read = await worker.request('config.read')
-        assert.deepEqual(read.models.coordinator.models, ['opus-9', 'sonnet-9', 'haiku-9'])
-        assert.deepEqual(read.models.worker.tiers, { best: 'opus-9', medium: 'sonnet-9', lowest: 'haiku-9' })
-      })
-      // Tiers of an unfamiliar naming scheme fall back to list position.
-      await withFakeAgent('claude', 'm-a m-b m-c m-d', async () => {
-        assert.deepEqual((await worker.request('config.read')).models.worker.tiers, { best: 'm-a', medium: 'm-c', lowest: 'm-d' })
-      })
-      // No models command: claude's preset of aliases, best / medium / lowest.
-      await withFakeAgent('claude', null, async () => {
-        const read = await worker.request('config.read')
-        assert.deepEqual(read.models.coordinator, { models: ['opus', 'sonnet', 'haiku'], tiers: { best: 'opus', medium: 'sonnet', lowest: 'haiku' } })
-        assert.deepEqual(read.problems, [], 'an agent that cannot list models is not a config problem')
-      })
-      // No models command and no preset: free text.
-      writeConfig(home, 'agents:\n  coordinator: {agent: mystery}\n  worker: {agent: mystery}\n')
-      await withFakeAgent('mystery', null, async () => {
-        assert.deepEqual((await worker.request('config.read')).models.coordinator, { models: null, tiers: null })
-      })
+      const read = await worker.request('config.read')
+      assert.deepEqual(read.config?.models?.roles, { coordinator: 'max', worker: 'standard', reader: 'light' })
+      assert.deepEqual(read.config?.models?.levels, { light: '', standard: '', max: '' })
+      assert.equal('models' in read, false, 'no model list is offered: the plugin knows no model')
+      assert.deepEqual(read.problems, [])
       await worker.deactivate()
     })
   })
 })
 
-test('config.save: models land under agents, other agent keys and unknown keys stay, an emptied model is cleared', async () => {
+test('config.save: only the level per role is written; ids per level and legacy models are not editable here', async () => {
   await withHome(async (home) => {
     await withFakeOrca(false, async () => {
-      const file = writeConfig(home, 'agents:\n  worker: {agent: claude, extraArgs: "--x", permissionsFile: ~/p.json}\n')
+      const file = writeConfig(home, 'models:\n  levels: {light: l-1, standard: "", max: m-1}\n')
       const worker = await mount(home)
-      const patch = { agents: { coordinator: { model: 'opus-9' }, worker: { model: 'sonnet-9' }, reader: { model: 'haiku-9' } } }
-      const saved = await worker.request('config.save', { patch })
+      const saved = await worker.request('config.save', { patch: { models: { roles: { coordinator: 'standard', worker: 'light', reader: 'bogus' }, levels: { max: 'invented' } } } as never })
       assert.deepEqual(saved.errors, [])
-      const read = await worker.request('config.read')
-      assert.deepEqual([read.config?.agents.coordinator.model, read.config?.agents.worker?.model, read.config?.agents.reader?.model], ['opus-9', 'sonnet-9', 'haiku-9'])
-      const yaml = readFileSync(file, 'utf8')
-      assert.match(yaml, /extraArgs: --x|extraArgs: "--x"/, 'the worker\'s other keys are kept')
-      assert.match(yaml, /myTeamNotes:\n\s+keep: true/)
-      await worker.request('config.save', { patch: { agents: { worker: { model: null } } } })
-      assert.equal((await worker.request('config.read')).config?.agents.worker?.model ?? null, null)
-      assert.equal((await worker.request('config.read')).config?.agents.coordinator.model, 'opus-9', 'the other roles keep theirs')
+      const read = (await worker.request('config.read')).config
+      assert.deepEqual(read?.models?.roles, { coordinator: 'standard', worker: 'light', reader: 'light' }, 'an unknown level is dropped')
+      assert.deepEqual(read?.models?.levels, { light: 'l-1', standard: '', max: 'm-1' }, 'the plugin never writes or invents ids')
+      assert.match(readFileSync(file, 'utf8'), /myTeamNotes:\n\s+keep: true/)
       await worker.deactivate()
     })
   })
 })
 
-test('setup.start: launches the coordinator with the coordinator model, never the worker model, and no --model when unset', async () => {
+test('setup.start: a level without an id passes no --model; an id passes it; a legacy agents.coordinator.model wins', async () => {
   await withHome(async (home) => {
-    const workspace = join(home, 'work')
-    mkdirSync(workspace)
     await withFakeOrca(false, async (log) => {
-      const file = writeConfig(home)
+      writeConfig(home)
       const worker = await mount(home)
-      await worker.request('setup.start')
-      assert.ok(!readFileSync(log, 'utf8').includes('--model'), 'unset: the agent\'s default')
-      await worker.request('config.save', { patch: { agents: { coordinator: { model: 'opus-9' }, worker: { model: 'sonnet-9' } } } })
-      await worker.request('setup.start')
-      const launches = readFileSync(log, 'utf8').split('\n').filter((l) => l.startsWith('agent launch'))
-      assert.match(launches[1], /--agent claude --model opus-9 --worktree/)
-      assert.ok(!launches[1].includes('sonnet-9'))
-      assert.ok(file)
+      await worker.request('setup.start', { agent: 'claude' })
+      assert.ok(!launchLines(log)[0].includes('--model'), 'Max has no id: Orca\'s default')
+      writeConfig(home, 'models:\n  levels: {light: "", standard: std-9, max: max-9}\n')
+      await worker.request('setup.start', { agent: 'claude' })
+      assert.match(launchLines(log)[1], /--model max-9 --worktree/)
+      assert.ok(!launchLines(log)[1].includes('std-9'))
+      writeConfig(home, 'models:\n  levels: {light: "", standard: std-9, max: max-9}\nagents:\n  coordinator: {agent: claude, model: by-hand-1}\n')
+      await worker.request('setup.start', { agent: 'claude' })
+      assert.match(launchLines(log)[2], /--model by-hand-1 --worktree/, 'a model set by hand keeps working and wins')
       await worker.deactivate()
     })
   })
@@ -1217,15 +1185,16 @@ test('board.closeSession: when Orca fails to release, the request rejects and th
   }, undefined, SESSIONS)
 })
 
-test('config.save: a custom model id outside the offered list (Other…) is kept and read back', async () => {
-  await withHome(async (home) => {
-    await withFakeOrca(false, async () => {
-      writeConfig(home)
-      const worker = await mount(home)
-      const saved = await worker.request('config.save', { patch: { agents: { coordinator: { model: 'my-custom-1' } } } })
-      assert.deepEqual(saved.errors, [])
-      assert.equal((await worker.request('config.read')).config?.agents.coordinator.model, 'my-custom-1')
-      await worker.deactivate()
-    })
-  })
+test('settings panel: generic helper lines (no drafts, PRs, tickets or chat), profiles set the three roles, a changed role reads Custom, no model name in the panel', () => {
+  const html = readFileSync(new URL('../panel/index.html', import.meta.url), 'utf8')
+  for (const line of ['What the coordinator calls you.', 'The language the coordinator uses with you.', 'How the coordinator writes to you, e.g. brief or detailed.', 'Light is cheapest, Max is smartest and costs most.']) {
+    assert.ok(html.includes(line), line)
+  }
+  const settings = html.slice(html.indexOf('// Intelligence levels per role'), html.indexOf('// Repos: the configured ones'))
+  assert.ok(!/draft|\bPR\b|ticket|chat/i.test(html.slice(html.indexOf("field('Name'"), html.indexOf("field('Name'") + 400)), 'helper lines are generic')
+  assert.match(settings, /save'.*coordinator: 'standard', worker: 'light', reader: 'light'/)
+  assert.match(settings, /balanced'.*coordinator: 'max', worker: 'standard', reader: 'light'/)
+  assert.match(settings, /best'.*coordinator: 'max', worker: 'max', reader: 'standard'/)
+  assert.match(settings, /profile\.value = profileOf\(\)/, 'changing a role re-derives the profile, Custom when none matches')
+  assert.ok(!/gpt|sonnet|opus|haiku|claude/i.test(settings), 'no model name in the settings code')
 })

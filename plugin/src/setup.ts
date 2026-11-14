@@ -7,7 +7,7 @@ import { cpSync, existsSync, readFileSync, readlinkSync, realpathSync, renameSyn
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ConfigPatch, ModelChoice, ConfigRepo, ConfigRead, ConfigSave, CoordinatorSettings, SetupAgent, SetupOptions, SetupRepo, SetupStatus, SetupWorkspace } from './protocol'
+import type { ConfigPatch, ModelRole, ConfigRepo, ConfigRead, ConfigSave, CoordinatorSettings, SetupAgent, SetupOptions, SetupRepo, SetupStatus, SetupWorkspace } from './protocol'
 import { listProjects, listReportedAgents, type Host } from './host'
 
 /** This plugin's root: src/ → plugin/ → the package. */
@@ -327,36 +327,9 @@ function coordinatorCli(config: CoordinatorSettings | null): string {
   return own && existsSync(own) ? own : path.join(PACKAGE_DIR, 'bin', 'coordinator.mjs')
 }
 
-const NO_MODELS: ModelChoice = { models: null, tiers: null }
-
-/** Stable aliases the agent's CLI accepts for --model, for an agent with no `models` command (`claude --help`: 'opus', 'sonnet'; haiku likewise). */
-const MODEL_PRESETS: Record<string, string[]> = { claude: ['opus', 'sonnet', 'haiku'] }
-
-/**
- * The models an agent offers: the lines of `<agent> models` (a CLI argv, no shell), else its preset.
- * Null when it has neither: the panel then asks for free text.
- * Tiers are picked by name (best / medium / lowest), else by position in the list.
- */
-export async function listModels(agent: string | undefined): Promise<ModelChoice> {
-  if (!agent || !/^[\w.-]+$/.test(agent)) return NO_MODELS
-  const result = await run(agent, ['models'], { timeout: 8000 })
-  const listed = result.ok ? [...new Set(lines(result.stdout).filter((line) => /^[A-Za-z0-9][\w./:@+-]*$/.test(line)))] : []
-  const models = listed.length ? listed : (MODEL_PRESETS[agent] ?? [])
-  if (models.length === 0) return NO_MODELS
-  const find = (pattern: RegExp, fallback: number) => models.find((m) => pattern.test(m)) ?? models[fallback]
-  return {
-    models,
-    tiers: {
-      best: find(/opus|ultra|max|pro|large/i, 0),
-      medium: find(/sonnet|medium|standard/i, Math.floor(models.length / 2)),
-      lowest: find(/haiku|nano|mini|flash|lite|small/i, models.length - 1)
-    }
-  }
-}
-
 /** What the settings view shows: the merged config (defaults filled), its problems, and the choices. */
 export async function readSettings(orca: Orca, host: Host | null = null): Promise<ConfigRead> {
-  const base = { path: configFile(), skippedRepos: [] as ConfigRepo[], models: { coordinator: NO_MODELS, worker: NO_MODELS } }
+  const base = { path: configFile(), skippedRepos: [] as ConfigRepo[] }
   const repos = await listGitRepos(orca, host).catch(() => [] as SetupRepo[])
   if (!existsSync(configFile())) return { ...base, repos, config: null, problems: [`no config at ${configFile()}: set the coordinator up first`] }
   const node = await findNode()
@@ -366,8 +339,7 @@ export async function readSettings(orca: Orca, host: Host | null = null): Promis
   const strict = await loadConfigJson(node, true)
   const lenient = strict.config ? null : await loadConfigJson(node, false)
   const config = strict.config ?? lenient?.config ?? null
-  const models = { coordinator: await listModels(config?.agents?.coordinator?.agent), worker: await listModels(config?.agents?.worker?.agent) }
-  return { ...base, repos, skippedRepos, models, config, problems: strict.config ? [] : strict.problems }
+  return { ...base, repos, skippedRepos, config, problems: strict.config ? [] : strict.problems }
 }
 
 /** config.yaml's repos entries that are not git repositories (`config --skipped-repos`); [] when unreadable. */
@@ -408,7 +380,17 @@ function mergeRepos(current: ConfigRepo[], form: ConfigRepo[], loaded: string[] 
 }
 
 /** The settings the panel may change; everything else (adapters, automations, queue, budget) stays config.yaml-only. */
-const EDITABLE = ['person', 'repos', 'agents'] as const
+const EDITABLE = ['person', 'repos', 'models'] as const
+const LEVELS = ['light', 'standard', 'max']
+const ROLES = ['coordinator', 'worker', 'reader']
+
+/** The model id a role runs with: a model set by hand under agents.<role>.model wins, else the id of the role's level; '' = pass no --model. */
+export function modelFor(config: CoordinatorSettings, role: ModelRole): string {
+  const legacy = (config.agents as Record<string, { model?: string | null } | undefined>)[role]?.model
+  if (legacy) return String(legacy)
+  const level = config.models?.roles?.[role]
+  return level ? String(config.models?.levels?.[level] ?? '') : ''
+}
 
 /**
  * Merges the editable settings into config.yaml (validated by the package's CLI), then renders.
@@ -419,6 +401,11 @@ export async function saveSettings(patch: ConfigPatch): Promise<ConfigSave> {
   const node = await findNode()
   if (!node) return { ok: false, saved: false, errors: [NO_NODE] }
   const editable = Object.fromEntries(EDITABLE.filter((key) => key in patch).map((key) => [key, patch[key]])) as ConfigPatch
+  // Models: only the level per role; the level -> id mapping is never written from here.
+  if (editable.models) {
+    const roles = Object.fromEntries(Object.entries(editable.models.roles ?? {}).filter(([role, level]) => ROLES.includes(role) && LEVELS.includes(String(level))))
+    editable.models = { roles }
+  }
   if (Array.isArray(editable.repos)) {
     const current = await loadConfigJson(node, false)
     if (!current.config) return { ok: false, saved: false, errors: ['config.yaml could not be read before the save; nothing was written.', ...current.problems] }

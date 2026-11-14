@@ -151,7 +151,8 @@
         .field { grid-template-columns: minmax(0, 1fr); }
         .field > .help { grid-column: 1; }
       }
-      .model-pick { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+      .advanced { min-width: 0; overflow-wrap: anywhere; }
+      .advanced > summary { cursor: pointer; }
       .field.top { align-items: start; }
       .field.top > span { padding-top: 4px; }
       .checks { display: flex; flex-direction: column; min-width: 0; }
@@ -832,32 +833,38 @@
         const language = select(languages.map(([value, label]) => ({ value, label })), person.language || 'en')
         const tone = input(person.tone)
 
-        // Models per role: a list when the agent can say what it offers, else free text (empty = the agent's own default).
-        const agents = config.agents || {}
-        const modelField = (label, choice, current, tier, help) => {
-          const saved = text(current)
-          if (!choice?.models?.length) {
-            const control = input(saved)
-            control.placeholder = "the agent's default"
-            return { control, node: field(label, control, false, help) }
-          }
-          // The agent's models, plus "Other…" for any id; a saved id the list lacks opens as Other.
-          const OTHER = '__other__'
-          const menu = select([...choice.models, { value: OTHER, label: 'Other…' }], !saved ? choice.tiers?.[tier] || choice.models[0] : choice.models.includes(saved) ? saved : OTHER)
-          const custom = input(choice.models.includes(saved) ? '' : saved)
-          custom.placeholder = 'model id'
-          const sync = () => { custom.hidden = menu.value !== OTHER }
-          menu.addEventListener('change', sync)
-          sync()
-          const control = { get value() { return menu.value === OTHER ? custom.value : menu.value } }
-          const row = el('div', 'model-pick')
-          row.append(menu, custom)
-          return { control, node: field(label, row, false, help) }
+        // Intelligence levels per role. A profile sets the three at once; changing one reads Custom.
+        // The level -> model id mapping is config.yaml's (the coordinator fills it): shown read-only below, never invented here.
+        const models = config.models || {}
+        const LEVELS = [{ value: 'light', label: 'Light' }, { value: 'standard', label: 'Standard' }, { value: 'max', label: 'Max' }]
+        const PROFILES = [
+          { value: 'save', label: 'Save', roles: { coordinator: 'standard', worker: 'light', reader: 'light' } },
+          { value: 'balanced', label: 'Balanced', roles: { coordinator: 'max', worker: 'standard', reader: 'light' } },
+          { value: 'best', label: 'Best', roles: { coordinator: 'max', worker: 'max', reader: 'standard' } }
+        ]
+        const saved = { coordinator: 'max', worker: 'standard', reader: 'light', ...(models.roles || {}) }
+        const roleMenus = {
+          coordinator: select(LEVELS, saved.coordinator),
+          worker: select(LEVELS, saved.worker),
+          reader: select(LEVELS, saved.reader)
         }
-        const models = read.models || {}
-        const coordinatorModel = modelField('Coordinator', models.coordinator, agents.coordinator?.model, 'best', 'Plans and judges; best tier.')
-        const workerModel = modelField('Workers', models.worker, agents.worker?.model, 'medium', 'Implement and fix; medium tier.')
-        const readerModel = modelField('Readers', models.worker, agents.reader?.model, 'lowest', 'Read-only reviews and triage; lowest tier.')
+        const profileOf = () => PROFILES.find((p) => Object.keys(p.roles).every((role) => roleMenus[role].value === p.roles[role]))?.value || 'custom'
+        const profile = select([...PROFILES, { value: 'custom', label: 'Custom' }], profileOf())
+        profile.onchange = () => {
+          const chosen = PROFILES.find((p) => p.value === profile.value)
+          if (chosen) for (const role of Object.keys(chosen.roles)) roleMenus[role].value = chosen.roles[role]
+        }
+        Object.values(roleMenus).forEach((menu) => { menu.onchange = () => { profile.value = profileOf() } })
+        const levelIds = LEVELS.map((level) => el('div', 'helper', level.label + ': ' + (text((models.levels || {})[level.value]) || "Orca's default")))
+        const byHand = ['coordinator', 'worker', 'reader'].filter((role) => text((config.agents || {})[role]?.model))
+        const advanced = el('details', 'advanced')
+        advanced.append(
+          el('summary', 'helper', 'Advanced'),
+          el('div', 'helper', 'Model id per level (the coordinator fills these at session start; empty = Orca\'s default):'),
+          ...levelIds,
+          ...byHand.map((role) => el('div', 'helper', 'agents.' + role + '.model is set in the file and wins over the level.')),
+          el('div', 'helper', 'Edit models.levels in ' + read.path)
+        )
 
         // Repos: the configured ones (kept as they are) plus Orca's others, unchecked.
         const configured = list(config.repos)
@@ -897,11 +904,18 @@
           el('h2', '', 'Settings'),
           el('div', 'path', read.path),
           ...form('You',
-            field('Name', name, false, 'How the coordinator addresses you and signs drafts.'),
-            field('Language', language, false, 'Language of the drafts it writes for you.'),
-            field('Tone', tone, false, 'Style of those drafts.')
+            field('Name', name, false, 'What the coordinator calls you.'),
+            field('Language', language, false, 'The language the coordinator uses with you.'),
+            field('Tone', tone, false, 'How the coordinator writes to you, e.g. brief or detailed.')
           ),
-          ...form('Models', coordinatorModel.node, workerModel.node, readerModel.node),
+          ...form('Intelligence',
+            el('div', 'helper', 'Light is cheapest, Max is smartest and costs most. A profile sets all three; change one and it reads Custom.'),
+            field('Profile', profile),
+            field('Coordinator', roleMenus.coordinator, false, 'Plans and judges.'),
+            field('Workers', roleMenus.worker, false, 'Implement and fix.'),
+            field('Readers', roleMenus.reader, false, 'Read-only reviews and triage.'),
+            advanced
+          ),
           ...form('Repositories', el('div', 'helper', 'The coordinator can start workers in these repositories.'), ...skipped, repoChecks),
           errors,
           actions
@@ -932,11 +946,7 @@
           const reposChanged = checkedRepos.length !== reposLoaded.length || checkedRepos.some((entry) => !reposLoaded.includes(text(entry.path)))
           const patch = {
             person: { name: name.value.trim(), language: language.value, tone: tone.value.trim() },
-            agents: {
-              coordinator: { model: coordinatorModel.control.value.trim() || null },
-              worker: { model: workerModel.control.value.trim() || null },
-              reader: { model: readerModel.control.value.trim() || null }
-            },
+            models: { roles: { coordinator: roleMenus.coordinator.value, worker: roleMenus.worker.value, reader: roleMenus.reader.value } },
             ...(reposChanged ? { repos: checkedRepos, reposLoaded } : {})
           }
           const local = []

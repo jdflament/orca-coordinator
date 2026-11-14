@@ -206,16 +206,15 @@ export interface CoordinatorSettings {
     reader?: { model?: string | null }
     [key: string]: unknown
   }
+  /** Intelligence levels: what each role runs on, and the model id per level (empty = Orca's default). agents.<role>.model, set by hand, wins over a level. */
+  models?: { levels?: Partial<Record<ModelLevel, string>>; roles?: Partial<Record<ModelRole, ModelLevel>> }
   repos: ConfigRepo[]
   /** Everything else (adapters, queue, budget, automations…) is config.yaml-only: the panel never reads or edits it. */
   [key: string]: unknown
 }
 
-/** The models one agent offers (`<agent> models`), null when it cannot say: the panel then shows a free-text field. tiers: best / medium / lowest of that list. */
-export interface ModelChoice {
-  models: string[] | null
-  tiers: { best: string; medium: string; lowest: string } | null
-}
+export type ModelLevel = 'light' | 'standard' | 'max'
+export type ModelRole = 'coordinator' | 'worker' | 'reader'
 
 /** What `config.read` answers. config is null when there is no config or it cannot be read. */
 export interface ConfigRead {
@@ -227,15 +226,14 @@ export interface ConfigRead {
   repos: SetupRepo[]
   /** config.yaml repos entries that are not git repositories: ignored, offered for removal. */
   skippedRepos: ConfigRepo[]
-  /** Models of the coordinator's agent and of the workers' agent (readers use the workers'). */
-  models: { coordinator: ModelChoice; worker: ModelChoice }
 }
 
 /** What `config.save` takes: merged into config.yaml; objects merge, repos replace. Other keys (adapters, automations, queue, budget) and a repo's ticketing / chat are ignored. */
 export interface ConfigPatch {
   person?: { name?: string; language?: string; tone?: string }
   repos?: ConfigRepo[]
-  agents?: { coordinator?: { model?: string | null }; worker?: { model?: string | null }; reader?: { model?: string | null } }
+  /** Only the level per role is editable here; the model id per level lives in config.yaml. */
+  models?: { roles?: Partial<Record<ModelRole, ModelLevel>> }
   /**
    * The repo paths the form showed as watched when it was opened. Given, the save applies only
    * the form's additions and removals to config.yaml's current repos, so a form opened before

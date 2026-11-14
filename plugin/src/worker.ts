@@ -9,7 +9,7 @@ import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { Board, BoardRemoval, BoardRemoveKind, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
 import { listReportedAgents } from './host'
-import { configFile, expandHome, getSetupStatus, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, staleSkillLinks, updateIfInstalledHere, updateLinks } from './setup'
+import { configFile, expandHome, getSetupStatus, modelFor, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, staleSkillLinks, updateIfInstalledHere, updateLinks } from './setup'
 import { linkHost } from './links'
 
 const DEFAULT_DIR = '~/.local/state/orca-coordinator'
@@ -348,7 +348,7 @@ async function startCoordinator(input: { agent?: string } = {}): Promise<{ start
   if (!agent && kinds.length > 1) return { started: false, output: 'Pick the agent to start the coordinator with (the agents Orca reports).', choices: kinds }
   if (!agent) return { started: false, output: "Orca does not report an agent to start here. Start the coordinator from Orca's own agent launcher (a new agent tab in " + config.paths.workspace + '), then ask it to load the coordinator skill.' }
   const prompt = 'Load the coordinator skill and start a coordinator session.'
-  const args = ['agent', 'launch', '--agent', agent, ...(config.agents.coordinator.model ? ['--model', String(config.agents.coordinator.model)] : []), '--worktree', `path:${config.paths.workspace}`, '--prompt', prompt, '--surface', 'terminal', '--focus', '--json']
+  const args = ['agent', 'launch', '--agent', agent, ...(modelFor(config, 'coordinator') ? ['--model', modelFor(config, 'coordinator')] : []), '--worktree', `path:${config.paths.workspace}`, '--prompt', prompt, '--surface', 'terminal', '--focus', '--json']
   try {
     await runOrca(args, 60000)
     return { started: true, output: '' }
