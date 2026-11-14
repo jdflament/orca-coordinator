@@ -200,7 +200,7 @@
   </head>
   <body>
     <main>
-      <header><span id="dot" class="dot"></span><strong>Coordinator</strong><span id="updated" class="meta">loading</span><button id="start" class="primary" hidden>Start coordinator</button><button id="more" class="icon" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"></button><div id="more-menu" class="menu" role="menu" hidden><button id="cleanup" role="menuitem" title="Shows what it would close and remove first; nothing changes until you confirm">Clean up finished workers…</button></div><button id="open" class="icon" title="Open coordinator"></button><button id="gear" class="icon" title="Settings" hidden></button></header>
+      <header><span id="dot" class="dot"></span><strong>Coordinator</strong><span id="updated" class="meta">loading</span><button id="start" class="primary" hidden>Start coordinator</button><button id="more" class="icon" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"></button><div id="more-menu" class="menu" role="menu" hidden><button id="cleanup" role="menuitem" title="Shows what it would close, remove and archive first; nothing changes until you confirm">Clean up…</button></div><button id="open" class="icon" title="Open coordinator"></button><button id="gear" class="icon" title="Settings" hidden></button></header>
       <div id="plan" class="plan" hidden></div>
       <div id="result" class="result"></div>
       <div id="links" class="notice" hidden></div>
@@ -759,10 +759,11 @@
 
       function getCleanupMessage(summary) {
         const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-        const counts = text(summary).match(/released (\d+) sessions, removed (\d+) worktrees, kept (\d+)/)
+        const counts = text(summary).match(/released (\d+) sessions, removed (\d+) worktrees, kept (\d+)(?:[^,]*, archived (\d+))?/)
         if (!counts) return 'Cleaned ' + time + ' · ' + text(summary)
-        if (counts[1] === '0' && counts[2] === '0') return 'Nothing to clean ' + time + ' · kept ' + counts[3]
-        return 'Cleaned ' + time + ' · released ' + counts[1] + ' sessions, removed ' + counts[2] + ' worktrees, kept ' + counts[3]
+        const archived = counts[4] || '0'
+        if (counts[1] === '0' && counts[2] === '0' && archived === '0') return 'Nothing to clean ' + time + ' · kept ' + counts[3]
+        return 'Cleaned ' + time + ' · released ' + counts[1] + ' sessions, removed ' + counts[2] + ' worktrees, archived ' + archived + ' board items, kept ' + counts[3]
       }
 
       const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many)
@@ -772,7 +773,8 @@
         if (!counts) return ''
         const steps = []
         if (counts.released > 0) steps.push('Close ' + plural(counts.released, 'finished worker tab', 'finished worker tabs'))
-        if (counts.removed > 0) steps.push('Remove ' + plural(counts.removed, 'merged worktree', 'merged worktrees'))
+        if (counts.removed > 0) steps.push('Remove ' + plural(counts.removed, 'done worktree', 'done worktrees'))
+        if (counts.archived > 0) steps.push('Archive ' + plural(counts.archived, 'finished board item', 'finished board items'))
         return steps.join(' · ')
       }
 
@@ -798,6 +800,12 @@
             plan.replaceChildren(el('div', 'what', 'Nothing to clean up'), ...(kept ? [kept] : []), el('div', 'actions'))
           } else {
             plan.replaceChildren(el('div', 'what', what), ...(kept ? [kept] : []), el('div', 'actions'))
+          }
+          const items = list(result?.actions)
+          if (items.length) {
+            const fold = el('details')
+            fold.append(el('summary', '', 'What it found'), ...items.map((line) => el('div', 'actions-list trunc', line)))
+            plan.querySelector('.actions').before(fold)
           }
           const actions = plan.querySelector('.actions')
           if (what) actions.append(button('Confirm', () => void runCleanup(), 'primary'))

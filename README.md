@@ -249,11 +249,15 @@ repo in Orca's Source Control), **Agents** (board agents and live workers with s
 heading opens Orca's Workspace Board).
 
 **Clean up** (⋯ menu) first runs `bin/cleanup -n`, a dry run that changes nothing, and shows
-what it would do ("Close 2 finished worker tabs · Remove 1 merged worktree", and what it
-keeps). Only **Confirm** runs it: it releases settled worker terminals (never the
-coordinator's, never a running worker) and removes clean worktrees under
-`paths.worktreeRoot` whose PR is merged or closed (never one with local changes, an open PR,
-or commits that are neither in its PR nor on a remote).
+what it would do ("Close 2 finished worker tabs · Remove 1 done worktree · Archive 3 finished
+board items", every item listed by group with its reason, and what it keeps). Only **Confirm**
+runs it. It releases settled worker terminals (never the coordinator's, never a live worker);
+asks Orca (`orca worktree list` / `rm`) for its worktrees and removes those whose branch is
+merged into the default branch or whose PR is merged or closed, with no local changes, no
+commits that are neither in the PR nor on a remote, and no live worker or open terminal (never
+the main checkout; `paths.worktreeRoot`, when set, only narrows the list); runs
+`git worktree prune` for stale entries; and moves merged tasks and answered decisions off the
+board into `archive/done-YYYY-MM.md`.
 
 The gear opens the settings described under Install; a `repos` entry in `config.yaml` that is
 not a git repository is listed there with a **Remove from repositories** button (it is

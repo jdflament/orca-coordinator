@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
-import { ok, sandbox } from './helpers.mjs'
+import { ok, ROOT, sandbox } from './helpers.mjs'
 
 const terminals = (list) => ({ match: ['terminal', 'list'], stdout: ok({ terminals: list }) })
 
@@ -105,6 +105,163 @@ test('cleanup.sh: a clean worktree with commits its merged PR does not have is k
   assert.equal(out.status, 0, out.err)
   assert.ok(!box.calls('orca').some((a) => a[0] === 'worktree' && a[1] === 'rm'))
   assert.match(out.out, /removed 0 worktrees, kept 1/)
+})
+
+// Orca decides which worktrees exist; with no paths.worktreeRoot every non-main one is a candidate.
+function worktreeFixture({ worktreeRoot } = {}) {
+  const box = sandbox()
+  box.writeConfig({ person: { name: 'Alex' }, paths: { state: box.state, workspace: box.dir, orca: path.join(box.dir, 'fake', 'orca'), ...(worktreeRoot ? { worktreeRoot } : {}) } })
+  const main = path.join(box.dir, 'repo')
+  fs.mkdirSync(main)
+  git(main, 'init', '-q', '-b', 'main')
+  fs.writeFileSync(path.join(main, 'a.txt'), 'a')
+  git(main, 'add', '.')
+  git(main, 'commit', '-qm', 'base')
+  const base = git(main, 'rev-parse', 'HEAD')
+  const trees = {}
+  const add = (name, { extraCommit = false } = {}) => {
+    const dir = path.join(box.dir, 'wt', name)
+    git(main, 'worktree', 'add', '-q', '-b', name, dir)
+    if (extraCommit) {
+      fs.writeFileSync(path.join(dir, `${name}.txt`), name)
+      git(dir, 'add', '.')
+      git(dir, 'commit', '-qm', `${name} work`)
+    }
+    trees[name] = { dir, head: git(dir, 'rev-parse', 'HEAD') }
+    return trees[name]
+  }
+  const prs = {}
+  const configure = ({ workers = [], terminals = [] } = {}) => {
+    const worktrees = [{ path: main, branch: 'refs/heads/main', isMainWorktree: true }, ...Object.entries(trees).map(([name, t]) => ({ path: t.dir, branch: `refs/heads/${name}`, isMainWorktree: false }))]
+    box.fake('orca', [
+      { match: ['worker-list'], stdout: ok({ workers }) },
+      { match: ['terminal', 'list'], stdout: ok({ terminals }) },
+      { match: ['worktree', 'list'], stdout: ok({ worktrees }) },
+      { match: [], stdout: ok({}) }
+    ])
+    box.fake('gh', [...Object.entries(prs).map(([name, pr]) => ({ match: ['pr', 'list', name], stdout: JSON.stringify(pr) })), { match: ['pr', 'list'], stdout: '[]' }])
+  }
+  const removed = () => box.calls('orca').filter((a) => a[0] === 'worktree' && a[1] === 'rm').map((a) => a[a.indexOf('--worktree') + 1])
+  return { box, main, base, add, prs, configure, removed, trees }
+}
+
+test('cleanup.sh without worktreeRoot: removes done worktrees through orca, keeps everything unsafe, says why', () => {
+  const f = worktreeFixture()
+  const ff = f.add('ff-merged')
+  const squash = f.add('squash', { extraCommit: true })
+  const closed = f.add('closed', { extraCommit: true })
+  const dirty = f.add('dirty')
+  fs.writeFileSync(path.join(dirty.dir, 'wip.txt'), 'x')
+  const unpushed = f.add('unpushed', { extraCommit: true })
+  const live = f.add('live')
+  const terminal = f.add('terminal')
+  const open = f.add('open', { extraCommit: true })
+  const nopr = f.add('nopr', { extraCommit: true })
+  f.prs.squash = [{ state: 'MERGED', number: 7, headRefOid: squash.head }]
+  f.prs.closed = [{ state: 'CLOSED', number: 8, headRefOid: closed.head }]
+  f.prs.unpushed = [{ state: 'MERGED', number: 9, headRefOid: f.base }]
+  f.prs.open = [{ state: 'OPEN', number: 10, headRefOid: open.head }]
+  f.configure({
+    workers: [{ dispatchId: 'ctx_live', state: 'ready', liveness: 'live', terminalState: 'active', terminal: 'term_w', workspace: `repo-id::${live.dir}` }],
+    terminals: [{ handle: 'term_open', worktreePath: terminal.dir }]
+  })
+
+  const dry = f.box.run('bin/cleanup.sh', ['-n'])
+  assert.equal(dry.status, 0, dry.err)
+  assert.deepEqual(f.removed(), [], 'a dry run removes nothing')
+  assert.ok(!/not configured/.test(dry.err))
+  for (const line of [
+    'worktrees: would remove wt/ff-merged (merged)',
+    'worktrees: would remove wt/squash (merged #7)',
+    'worktrees: would remove wt/closed (closed #8)',
+    'worktrees: kept wt/dirty: dirty',
+    'worktrees: kept wt/unpushed: unpushed',
+    'worktrees: kept wt/live: live (worker or open terminal)',
+    'worktrees: kept wt/terminal: live (worker or open terminal)',
+    'worktrees: kept wt/open: open PR #10',
+    'worktrees: kept wt/nopr: no merged or closed PR'
+  ]) assert.ok(dry.out.split('\n').includes(line), `${line}\n${dry.out}`)
+  assert.match(dry.out, /removed 3 worktrees, kept 6/)
+
+  const real = f.box.run('bin/cleanup.sh')
+  assert.equal(real.status, 0, real.err)
+  assert.deepEqual(f.removed().sort(), [ff, squash, closed].map((t) => `path:${t.dir}`).sort())
+  assert.ok(!f.removed().includes(`path:${f.main}`), 'the main checkout is never removed')
+  assert.ok(!f.box.calls('orca').flat().some((a) => a === '--force' || a === '--delete-branch'))
+})
+
+test('cleanup.sh: paths.worktreeRoot only narrows the candidates', () => {
+  const f = worktreeFixture({ worktreeRoot: undefined })
+  const inside = f.add('inside')
+  const outside = f.add('outside')
+  f.box.writeConfig({ person: { name: 'Alex' }, paths: { state: f.box.state, workspace: f.box.dir, orca: path.join(f.box.dir, 'fake', 'orca'), worktreeRoot: path.dirname(inside.dir) + '/in' } })
+  const moved = path.join(path.dirname(inside.dir), 'in', 'inside')
+  fs.mkdirSync(path.dirname(moved), { recursive: true })
+  git(f.main, 'worktree', 'move', inside.dir, moved)
+  inside.dir = moved
+  f.configure()
+  const out = f.box.run('bin/cleanup.sh')
+  assert.equal(out.status, 0, out.err)
+  assert.deepEqual(f.removed(), [`path:${moved}`])
+  assert.ok(!out.out.includes('outside'))
+  void outside
+})
+
+test('cleanup.sh: stale git worktree entries are pruned (dry run only lists them)', () => {
+  const f = worktreeFixture()
+  const gone = f.add('gone')
+  fs.rmSync(gone.dir, { recursive: true })
+  delete f.trees.gone
+  f.configure()
+  const dry = f.box.run('bin/cleanup.sh', ['-n'])
+  assert.match(dry.out, /worktrees: would prune stale worktree entry: .*gone/)
+  assert.match(git(f.main, 'worktree', 'list'), /gone/)
+  const real = f.box.run('bin/cleanup.sh')
+  assert.match(real.out, /worktrees: pruned stale worktree entry: .*gone/)
+  assert.ok(!/gone/.test(git(f.main, 'worktree', 'list')))
+})
+
+test('cleanup.sh: releases settled workers whose terminal is retained, never a live one', () => {
+  const f = worktreeFixture()
+  f.configure({
+    workers: [
+      { dispatchId: 'ctx_done', state: 'succeeded', liveness: 'exited', terminalState: 'retained', terminal: 'term_done' },
+      { dispatchId: 'ctx_live', state: 'ready', liveness: 'live', terminalState: 'retained', terminal: 'term_live' },
+      { dispatchId: 'ctx_old', state: 'succeeded', liveness: 'exited', terminalState: 'released', terminal: 'term_old' }
+    ]
+  })
+  const out = f.box.run('bin/cleanup.sh')
+  assert.equal(out.status, 0, out.err)
+  const released = f.box.calls('orca').filter((a) => a[1] === 'worker-release').map((a) => a[a.indexOf('--dispatch') + 1])
+  assert.deepEqual(released, ['ctx_done'])
+  assert.match(out.out, /released 1 sessions/)
+})
+
+test('cleanup.sh: merged tasks and answered decisions are archived, open ones stay', () => {
+  const f = worktreeFixture()
+  f.configure()
+  const board = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'bin', 'board.mjs'), ...args], { encoding: 'utf8', env: { ...f.box.env, COORDINATOR_STATE: f.box.state, ORCA_COORDINATOR_CONFIG: f.box.configPath } })
+  board('init')
+  board('task:add', 'T-1', '--status', 'merged', '--pr', '5')
+  board('task:add', 'T-2', '--status', 'pr')
+  board('ask', 'Ship it?')
+  board('ask', 'Rename?')
+  board('answer', '1', 'done')
+  const dry = f.box.run('bin/cleanup.sh', ['-n'])
+  assert.match(dry.out, /board: would archive task T-1 \(merged #5\)/)
+  assert.match(dry.out, /board: would archive decision 1/)
+  assert.match(dry.out, /archived 2 board items/)
+  assert.equal(JSON.parse(board('show', '--json').stdout).tasks.length, 2, 'a dry run changes nothing')
+  const real = f.box.run('bin/cleanup.sh')
+  assert.equal(real.status, 0, real.err)
+  const after = JSON.parse(board('show', '--json').stdout)
+  assert.deepEqual(after.tasks.map((t) => t.id), ['T-2'])
+  assert.deepEqual(after.decisions.map((d) => d.title), ['Rename?'])
+  const archive = fs.readdirSync(path.join(f.box.state, 'archive')).filter((n) => /^done-\d{4}-\d{2}\.md$/.test(n))
+  assert.equal(archive.length, 1)
+  const text = fs.readFileSync(path.join(f.box.state, 'archive', archive[0]), 'utf8')
+  assert.match(text, /task T-1/)
+  assert.match(text, /decision 1: Ship it\?/)
 })
 
 // ---- adapters ----

@@ -281,9 +281,9 @@ function cleanupFixture(): { dir: string; calls: () => string[]; worktree: strin
   const head = git('rev-parse', 'HEAD')
   const log = join(fake, 'calls.log')
   const workers = [
-    { dispatchId: 'ctx_done', state: 'succeeded', terminalState: 'retained', terminal: 'term_done' },
-    { dispatchId: 'ctx_live', state: 'running', terminalState: 'retained', terminal: 'term_live' },
-    { dispatchId: 'ctx_self', state: 'succeeded', terminalState: 'retained', terminal: 'term_coord' }
+    { dispatchId: 'ctx_done', state: 'succeeded', liveness: 'exited', terminalState: 'retained', terminal: 'term_done' },
+    { dispatchId: 'ctx_live', state: 'running', liveness: 'live', terminalState: 'retained', terminal: 'term_live' },
+    { dispatchId: 'ctx_self', state: 'succeeded', liveness: 'exited', terminalState: 'retained', terminal: 'term_coord' }
   ]
   const worktrees = [{ path: worktree, branch: 'refs/heads/feat', isMainWorktree: false }]
   writeFileSync(
@@ -297,7 +297,7 @@ case "$1 $2" in
 esac
 `
   )
-  writeFileSync(join(fake, 'gh'), `#!/bin/sh\necho "gh $@" >> "${log}"\necho "MERGED ${head}"\n`)
+  writeFileSync(join(fake, 'gh'), `#!/bin/sh\necho "gh $@" >> "${log}"\necho "MERGED 3 ${head}"\n`)
   chmodSync(join(fake, 'orca'), 0o755)
   chmodSync(join(fake, 'gh'), 0o755)
   const config = join(root, 'config.yaml')
@@ -318,8 +318,8 @@ test('board.cleanup dry run: counts what it would close and remove, and changes 
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
     const result = await worker.request('board.cleanup', { dryRun: true })
     assert.equal(result.dryRun, true)
-    assert.deepEqual(result.counts, { released: 1, removed: 1, kept: 0 })
-    assert.deepEqual(result.actions, ['would release ctx_done', 'would remove api/feat'])
+    assert.deepEqual(result.counts, { released: 1, removed: 1, kept: 0, archived: 0 })
+    assert.deepEqual(result.actions, ['workers: would release ctx_done (succeeded)', 'worktrees: would remove api/feat (merged #3)'])
     assert.deepEqual(calls().filter(isAction), [], 'a dry run releases no tab and removes no worktree')
     assert.ok(existsSync(worktree))
     await worker.deactivate()
@@ -331,8 +331,8 @@ test('board.cleanup confirmed: releases the finished worker only (never a runnin
     const { dir, calls, worktree } = cleanupFixture()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
     const result = await worker.request('board.cleanup', { dryRun: false })
-    assert.equal(result.summary, 'released 1 sessions, removed 1 worktrees, kept 0 (dirty/open/unpushed)')
-    assert.deepEqual(result.counts, { released: 1, removed: 1, kept: 0 })
+    assert.equal(result.summary, 'released 1 sessions, removed 1 worktrees, kept 0 (dirty/open/unpushed), archived 0 board items')
+    assert.deepEqual(result.counts, { released: 1, removed: 1, kept: 0, archived: 0 })
     assert.deepEqual(calls().filter(isAction), ['orchestration worker-release --dispatch ctx_done', `worktree rm --worktree path:${worktree} --json`], 'neither the running worker nor the coordinator terminal is released')
     await worker.deactivate()
   })

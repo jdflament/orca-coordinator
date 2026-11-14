@@ -44,7 +44,7 @@ Supersedes the 2026-11-11 notes where they differ (the ticket-link template from
 
 - **The panel's settings are the person and the repos only.** Name, writing language and style, and the watched repositories; written through `coordinator.mjs config --merge`, read back to check, then rendered. Automations, queue, budget and the CLI adapters stay `config.yaml`-only; a save never touches them, even when a patch names them. No per-repo ticketing or chat settings in the panel.
 - **Repos are git repositories only.** A `repos[]` entry that is not the top of a git work tree (the workspace folder, a folder inside a repo, a missing path) is a warning, skipped by every consumer, never written by `init` or `config --merge`, and offered for removal in the settings view.
-- **Clean up previews first.** The ⋯ menu runs `bin/cleanup -n` (changes nothing) and shows what it would close and remove; only Confirm runs it.
+- **Clean up previews first.** The ⋯ menu runs `bin/cleanup -n` (changes nothing) and shows what it would close, remove and archive; only Confirm runs it.
 - **The status-line badge reads the plugin's own file, not Orca's database.** Orca sets no env var for dispatched workers, so the plugin worker writes the terminals of the workers Orca lists to `<state>/worker-terminals` and `bin/statusline.sh` only reads it (no `sqlite3`, no dependency on Orca's schema; Orca plugin review, issue #1). The chained previous status line runs without a shell. `orca-coordinator statusline` re-chains a replaced `statusLine`.
 
 ## 2026-11-14: generic defaults, optional team-process rules

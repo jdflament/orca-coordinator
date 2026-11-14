@@ -12,7 +12,7 @@ A right-sidebar panel over the coordinator's `board.json`: what needs you (decis
 with imperative buttons, workers waiting for input), work grouped by workstream with
 ticket and PR links (each item's own url; a known host only adds an icon), local git work of
 the configured repos, running agents, a live dot for the coordinator terminal, and a
-**Clean up** item in the ⋯ menu that previews the zero-model cleanup script (`-n`) and runs
+**Clean up** item in the ⋯ menu that previews the zero-model cleanup script (`-n`: finished workers, done worktrees, finished board items) and runs
 it on Confirm.
 
 - Buttons send text to the coordinator terminal (`<option> <id>`, `nudge <ticket>`,
