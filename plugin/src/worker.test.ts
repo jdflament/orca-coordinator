@@ -6,6 +6,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as main from './worker'
+import { listProjects, type Host } from './host'
 import type { ConfigPatch } from './protocol'
 
 const busy = new URL('./fixtures/busy.json', import.meta.url).pathname
@@ -616,36 +617,6 @@ test('board.get: a board.json that is not JSON shows an empty board with live wo
   })
 })
 
-test('panel.font hands over Orca\'s own Geist file in chunks under the panel message cap, and nothing when Orca has none', async () => {
-  const fonts = mkdtempSync(join(tmpdir(), 'orca-fonts-'))
-  const previous = process.env.ORCA_COORDINATOR_FONT_DIR
-  process.env.ORCA_COORDINATOR_FONT_DIR = fonts
-  try {
-    await withFakeOrca(true, async () => {
-      const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
-      assert.deepEqual(await worker.request('panel.font', { part: 0 }), { family: '', data: '', parts: 0 }, 'no font file: the panel keeps its fallback')
-
-      const bytes = Buffer.alloc(70000, 7)
-      bytes.write('wOF2', 0, 'latin1')
-      writeFileSync(join(fonts, 'Geist-Variable-abc123.woff2'), bytes)
-      const first = await worker.request('panel.font', { part: 0 })
-      assert.equal(first.family, 'Geist')
-      assert.ok(first.parts >= 2, 'a 70 KB font does not fit one 64 KB panel message')
-      const chunks = [first.data]
-      for (let part = 1; part < first.parts; part++) chunks.push((await worker.request('panel.font', { part })).data)
-      assert.ok(chunks.every((chunk) => JSON.stringify(chunk).length < 60000), 'each chunk fits a panel message')
-      assert.ok(Buffer.from(chunks.join(''), 'base64').equals(bytes), 'the chunks rebuild the exact file')
-
-      writeFileSync(join(fonts, 'Geist-Variable-abc123.woff2'), Buffer.alloc(400000, 1))
-      assert.equal((await worker.request('panel.font', { part: 0 })).parts, 0, 'not a WOFF2 file, or too large: fall back')
-      await worker.deactivate()
-    })
-  } finally {
-    if (previous === undefined) delete process.env.ORCA_COORDINATOR_FONT_DIR
-    else process.env.ORCA_COORDINATOR_FONT_DIR = previous
-  }
-})
-
 test('work.openChanges opens a repo in Orca\'s Source Control, falls back to the CLI diff, and refuses an unknown repo', async () => {
   await withHome(async (home) => {
     const api = gitRepo(join(home, 'work/api'))
@@ -800,4 +771,71 @@ test('config.save: tool blocks in the patch are ignored, and config.yaml\'s adap
       await worker.deactivate()
     })
   })
+})
+
+// ---- host API or CLI (host.ts) ----
+
+const cliProjects = async (args: string[]): Promise<string> => {
+  assert.deepEqual(args, ['repo', 'list', '--json'])
+  return JSON.stringify({ result: { repos: [{ id: 'cli', path: '/cli/repo', displayName: 'cli-repo', kind: 'git' }] } })
+}
+
+function fakeHost(methods: Record<string, () => unknown>): Host & { calls: string[] } {
+  const calls: string[] = []
+  return {
+    calls,
+    has: (method) => method in methods,
+    call: async (method) => {
+      calls.push(method)
+      return methods[method]()
+    }
+  }
+}
+
+test('listProjects: the host API answers when Orca offers project.list; the CLI answers when it does not', async () => {
+  const api = fakeHost({ 'project.list': () => ({ projects: [{ id: 'api', path: '/api/repo', name: 'api-repo', kind: 'git', hostId: 'local' }], truncated: false }) })
+  assert.deepEqual(await listProjects(api, async () => assert.fail('the CLI must not run')), [{ id: 'api', path: '/api/repo', displayName: 'api-repo', kind: 'git' }], 'host rows are mapped to the CLI row shape')
+  assert.deepEqual(api.calls, ['project.list'])
+
+  const old = fakeHost({})
+  assert.deepEqual((await listProjects(old, cliProjects)).map((p) => p.id), ['cli'], 'Orca 1.4.257: no project.list, the CLI path')
+  assert.deepEqual(old.calls, [])
+  assert.deepEqual((await listProjects(null, cliProjects)).map((p) => p.id), ['cli'], 'no host at all')
+})
+
+test('listProjects: a failing host API is a clear error naming the method, not a silent CLI answer', async () => {
+  const failing = fakeHost({ 'project.list': () => { throw new Error('capability_denied') } })
+  await assert.rejects(listProjects(failing, async () => assert.fail('no silent fallback')), /project\.list failed: capability_denied/)
+  const odd = fakeHost({ 'project.list': () => ({}) })
+  await assert.rejects(listProjects(odd, cliProjects), /project\.list returned no projects list/)
+})
+
+test('setup.status on a host without project.list (Orca 1.4.257) lists repos through the CLI', async () => {
+  await withHome(async (home) => {
+    const repo = gitRepo(join(home, 'api'))
+    await withFakeOrca(false, async (log) => {
+      const host = mockHost({ settings: { coordinatorDir: join(home, 'state') } })
+      const worker = await mountWorker(main, { host })
+      assert.deepEqual((await worker.request('setup.status')).repos.map((r) => r.name), ['api'])
+      assert.ok(readFileSync(log, 'utf8').includes('repo list --json'), 'the CLI answered')
+      assert.deepEqual(host.callsOf('project.list'), [], 'the host API was not called')
+      await worker.deactivate()
+    }, [{ path: repo, displayName: 'api', kind: 'git' }])
+  })
+})
+
+test('board.get writes worker-terminals for the status line: each worker terminal once, no bookkeeping, nothing unsafe', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    await worker.request('board.get')
+    assert.equal(readFileSync(join(dir, 'worker-terminals'), 'utf8'), 'term_w1\nterm_w2\n')
+    await worker.deactivate()
+  }, undefined, [
+    { dispatchId: 'a', state: 'running', terminal: 'term_w1', taskId: 't1' },
+    { dispatchId: 'b', state: 'blocked', terminal: 'term_w2', taskId: 't2' },
+    { dispatchId: 'c', state: 'running', terminal: 'term_w1', taskId: 't3' },
+    { dispatchId: 'd', state: 'running', terminal: 'bad handle; rm', taskId: 't4' },
+    { dispatchId: 'e', state: 'succeeded', terminal: null, taskId: 't5' }
+  ])
 })

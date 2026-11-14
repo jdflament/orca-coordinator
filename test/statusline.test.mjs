@@ -1,6 +1,6 @@
 // bin/statusline.sh: the role badge in Claude Code's status line, and its install/doctor in
-// coordinator.mjs (init, doctor, `statusline`, uninstall). Orca's orchestration database
-// (dispatch_contexts) is the worker signal; tests build a real one.
+// coordinator.mjs (init, doctor, `statusline`, uninstall). The worker signal is the plugin's
+// <state>/worker-terminals file; the script never reads Orca's own files.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
@@ -12,30 +12,23 @@ const SCRIPT = path.join(ROOT, 'bin', 'statusline.sh')
 const COORD = 'term_coord-1'
 const WORKER = 'term_worker-2'
 const SAMPLE = '{"model":{"display_name":"Opus"},"rate_limits":{}}'
-const hasSqlite = spawnSync('sqlite3', ['--version']).status === 0
-const needsSqlite = { skip: hasSqlite ? false : 'sqlite3 not on PATH' }
 
-function setup({ chain, rows = [[WORKER, COORD]] } = {}) {
+function setup({ chain, workers = [WORKER] } = {}) {
   const box = sandbox()
   fs.mkdirSync(box.state, { recursive: true })
   fs.writeFileSync(path.join(box.state, 'coordinator-terminal'), COORD + '\n')
   if (chain !== undefined) fs.writeFileSync(path.join(box.state, 'statusline-chain'), chain + '\n')
-  const db = path.join(box.dir, 'orchestration.db')
-  if (hasSqlite) {
-    const values = rows.map(([a, c]) => `('ctx_${a}_${c}', '${a}', ${c ? `'${c}'` : 'NULL'})`).join(',')
-    const sql = `CREATE TABLE dispatch_contexts (id TEXT PRIMARY KEY, assignee_handle TEXT, creator_handle TEXT);${rows.length ? `INSERT INTO dispatch_contexts VALUES ${values};` : ''}`
-    assert.equal(spawnSync('sqlite3', [db, sql]).status, 0)
-  }
+  if (workers) fs.writeFileSync(path.join(box.state, 'worker-terminals'), workers.map((w) => w + '\n').join(''))
   const render = (handle, extraEnv = {}) => {
-    const env = { ...box.env, COORDINATOR_STATE: box.state, ORCA_ORCHESTRATION_DB: db, ...extraEnv }
+    const env = { ...box.env, COORDINATOR_STATE: box.state, ...extraEnv }
     if (handle) env.ORCA_TERMINAL_HANDLE = handle
     const r = spawnSync('/bin/bash', [SCRIPT], { input: SAMPLE, encoding: 'utf8', env, timeout: 5000 })
     return { status: r.status, out: r.stdout, err: r.stderr }
   }
-  return { box, db, render }
+  return { box, render }
 }
 
-test('statusline: the coordinator terminal shows ◆ COORDINATOR and nothing about workers', needsSqlite, () => {
+test('statusline: the coordinator terminal shows ◆ COORDINATOR and nothing about workers', () => {
   const { render } = setup()
   const r = render(COORD)
   assert.equal(r.status, 0)
@@ -43,7 +36,7 @@ test('statusline: the coordinator terminal shows ◆ COORDINATOR and nothing abo
   assert.doesNotMatch(r.out, /WORKER/)
 })
 
-test('statusline: a terminal Orca dispatched a worker to shows WORKER', needsSqlite, () => {
+test('statusline: a terminal listed in worker-terminals shows WORKER', () => {
   const { render } = setup()
   const r = render(WORKER)
   assert.equal(r.status, 0)
@@ -51,47 +44,57 @@ test('statusline: a terminal Orca dispatched a worker to shows WORKER', needsSql
   assert.doesNotMatch(r.out, /COORDINATOR/)
 })
 
-test('statusline: a chat started by hand, Orca bookkeeping or a terminal outside Orca shows no badge', needsSqlite, () => {
-  const { render } = setup({ rows: [[WORKER, COORD], ['term_self-3', 'term_self-3']] })
-  assert.equal(render('term_hand-9').out, '', 'Orca terminal with no dispatch')
-  assert.equal(render('term_self-3').out, '', 'Orca bookkeeping row (creator is its own assignee) is not a dispatch')
+test('statusline: a chat by hand, a handle that only contains a listed one, or a terminal outside Orca shows no badge', () => {
+  const { render } = setup()
+  assert.equal(render('term_hand-9').out, '', 'Orca terminal not in the file')
+  assert.equal(render('term_worker').out, '', 'whole-line match: a prefix of a listed handle is not listed')
   assert.equal(render(undefined).out, '', 'terminal outside Orca')
 })
 
-test('statusline: a handle that is not a plain id never reaches the SQL query', needsSqlite, () => {
-  const { render } = setup()
-  assert.equal(render(`x' OR '1'='1`).out, '')
+test('statusline: no worker-terminals file means no WORKER badge, not an error; the coordinator badge stays', () => {
+  const { render } = setup({ workers: null })
+  assert.deepEqual([render(WORKER).status, render(WORKER).out], [0, ''])
+  assert.match(render(COORD).out, /◆ COORDINATOR/)
 })
 
-test('statusline: no orchestration database or no sqlite3 means no badge, not an error', () => {
-  const { box, render } = setup()
-  const missing = render(WORKER, { ORCA_ORCHESTRATION_DB: path.join(box.dir, 'absent.db') })
-  assert.deepEqual([missing.status, missing.out], [0, ''])
-  const bin = path.join(box.dir, 'bare-bin')
-  fs.mkdirSync(bin)
-  fs.symlinkSync('/bin/cat', path.join(bin, 'cat'))
-  const noSqlite = render(WORKER, { PATH: bin })
-  assert.deepEqual([noSqlite.status, noSqlite.out], [0, ''])
+test('statusline: never reads Orca\'s database (an Orca terminal with a dispatch row but no file gets nothing)', () => {
+  const { box, render } = setup({ workers: null })
+  const db = path.join(box.dir, 'orchestration.db')
+  fs.writeFileSync(db, 'not a database')
+  assert.equal(render(WORKER, { ORCA_ORCHESTRATION_DB: db }).out, '')
+  assert.doesNotMatch(fs.readFileSync(SCRIPT, 'utf8'), /sqlite3|orchestration\.db|dispatch_contexts/)
 })
 
-test('statusline: the chained command gets the status JSON and prints before the badge', needsSqlite, () => {
-  const { render } = setup({ chain: `sed 's/^/ORCA:/'` })
+test('statusline: the chained command gets the status JSON (no shell, ~ expanded) and prints before the badge', () => {
+  const { box, render } = setup({ chain: '~/chain.sh arg' })
+  fs.writeFileSync(path.join(box.home, 'chain.sh'), '#!/bin/sh\nprintf "ORCA:%s:" "$1"; cat\n', { mode: 0o755 })
   const r = render(COORD)
-  assert.ok(r.out.startsWith(`ORCA:${SAMPLE}`), r.out)
+  assert.ok(r.out.startsWith(`ORCA:arg:${SAMPLE}`), r.out)
   assert.match(r.out, /◆ COORDINATOR/)
-  assert.equal(render('term_hand-9').out, `ORCA:${SAMPLE}`, 'plain sessions keep the chained line, add nothing')
+  assert.equal(render('term_hand-9').out, `ORCA:arg:${SAMPLE}`, 'plain sessions keep the chained line, add nothing')
 })
 
-test('statusline: a failing chained command does not hide the badge or leak its error', needsSqlite, () => {
-  const { render } = setup({ chain: 'echo boom >&2; exit 3' })
+test('statusline: a chain that needs shell syntax is not run (no shell string), and the badge still shows', () => {
+  const { box, render } = setup()
+  const marker = path.join(box.dir, 'marker')
+  fs.writeFileSync(path.join(box.state, 'statusline-chain'), `echo pwned > ${marker}; exit 3\n`)
+  const r = render(WORKER)
+  assert.equal(r.status, 0)
+  assert.match(r.out, /WORKER/)
+  assert.equal(r.err, '')
+  assert.ok(!fs.existsSync(marker), 'nothing ran')
+})
+
+test('statusline: a failing chained command does not hide the badge or leak its error', () => {
+  const { render } = setup({ chain: '/bin/sh -n /nonexistent-file' })
   const r = render(WORKER)
   assert.equal(r.status, 0)
   assert.match(r.out, /WORKER/)
   assert.equal(r.err, '')
 })
 
-test('statusline: a chain that points back at the script terminates', needsSqlite, () => {
-  const { render } = setup({ chain: `bash ${JSON.stringify(SCRIPT)}` })
+test('statusline: a chain that points back at the script terminates', () => {
+  const { render } = setup({ chain: `bash ${SCRIPT}` })
   const r = render(COORD)
   assert.equal(r.status, 0, 'no endless recursion (the spawn timeout would kill it)')
   assert.equal(r.out.match(/COORDINATOR/g).length, 1)

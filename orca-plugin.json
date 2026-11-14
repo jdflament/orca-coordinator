@@ -41,6 +41,15 @@
       "kind": "settings:own"
     },
     {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "terminal:send"
+    },
+    {
+      "kind": "agent:read"
+    },
+    {
       "kind": "workspace:write"
     }
   ]
