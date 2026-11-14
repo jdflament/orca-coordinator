@@ -77,7 +77,9 @@ for (const tag of TAGS) {
       assert.deepEqual([...enabledOptionalRules(config)].sort(), availableOptionalRules(), 'same rules on as before the migration')
     } else {
       // Already current: the stored rules.optional is the user's choice and is kept as written.
-      assert.deepEqual(config.rules.optional, /^\s*optional:\s*\[\s*\]/m.test(original) ? [] : config.rules.optional)
+      const listed = /^\s*optional:\s*\[([^\]]*)\]/m.exec(original)
+      assert.ok(listed, 'the fixture stores rules.optional as an inline list')
+      assert.deepEqual(config.rules.optional, listed[1].split(',').map((name) => name.trim()).filter(Boolean))
     }
     const migrated = read(box.configPath)
     assert.match(migrated, new RegExp(`^schemaVersion: ${CONFIG_VERSION}$`, 'm'))
