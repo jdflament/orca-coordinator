@@ -308,7 +308,6 @@ test('plugin load: a failed install leaves no "installed by this package" marker
   assert.ok(!fs.existsSync(path.join(box.state, 'plugin-folder')))
 })
 
-<<<<<<< HEAD
 // ---- which(): PATH search without a shell ----
 
 test('doctor finds a tool in a PATH folder with spaces and quotes, skips a non-executable file, and never runs a shell', () => {
@@ -324,7 +323,8 @@ test('doctor finds a tool in a PATH folder with spaces and quotes, skips a non-e
   assert.match(out.out, new RegExp(`✓ jq: ${odd.replace(/[$"]/g, '\\$&')}/jq`), 'the executable one is found, the non-executable earlier entry is skipped')
   const none = box.run(CLI, ['doctor'], { extraEnv: { PATH: plain } })
   assert.match(none.out, /✗ jq: not on PATH/)
-=======
+})
+
 test('render: the onboarding-scan playbook runs in the coordinator (no worker preamble) and the session rule points at it', () => {
   const box = sandbox()
   assert.equal(box.run(CLI, ['render']).status, 0)
@@ -335,5 +335,4 @@ test('render: the onboarding-scan playbook runs in the coordinator (no worker pr
   assert.ok(fs.statSync(path.join(box.state, 'bin', 'scan')).mode & 0o100, 'scan wrapper is executable')
   const rules = fs.readFileSync(path.join(box.state, 'COORDINATOR.md'), 'utf8')
   assert.match(rules, /rescan.*onboarding-scan\.md/s)
->>>>>>> c04aeee (Add first-start onboarding scan: playbook, session rule step, bin/scan helper)
 })
