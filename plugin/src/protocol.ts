@@ -261,7 +261,7 @@ export interface CleanupResult {
   summary: string
   actions: string[]
   dryRun: boolean
-  counts?: { released: number; removed: number; kept: number }
+  counts?: { released: number; removed: number; kept: number; archived: number }
 }
 
 /** saved: config.yaml was written; ok: and render succeeded. */

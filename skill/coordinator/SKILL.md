@@ -35,8 +35,8 @@ tracker, chat, agents, limits) is configuration, never assumed.
 
 - `<paths.state>/bin/board` (`B`): the board CLI. `B help` lists the verbs; it
   validates every write and keeps `BOARD.md` beside the JSON.
-- `<paths.state>/bin/cleanup`: zero-model cleanup of settled worker terminals
-  and merged worktrees (`-n`: dry run). The panel's Clean up (⋯ menu) runs the same script.
+- `<paths.state>/bin/cleanup`: zero-model cleanup of settled worker terminals,
+  done worktrees and finished board items (`-n`: dry run). The panel's Clean up (⋯ menu) runs the same script.
 - `<paths.state>/bin/metrics`, `lessons`, `state`: counters, corrections,
   hand-over file checks.
 - Ticketing, chat and docs: whatever tools your agent has (MCP servers or CLIs),

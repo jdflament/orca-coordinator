@@ -17,7 +17,7 @@ paths:
   package: ~/src/orca-coordinator           # this clone (init fills it in)
   state: ~/.local/state/orca-coordinator    # state.md, board.json, reports/, lessons.md, metrics.tsv
   workspace: ~/code                         # the Orca workspace folder the coordinator runs in
-  worktreeRoot: ~/worktrees                 # where Orca creates worktrees (init detects it; cleanup only touches these)
+  worktreeRoot: ~/worktrees                 # where Orca creates worktrees (init detects it; optional: when set, cleanup only touches worktrees under it)
   orca: /Applications/Orca.app/Contents/Resources/bin/orca
 
 agents:

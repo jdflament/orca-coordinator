@@ -441,6 +441,32 @@ const commands = {
     if (!removed.length && !settled.length) console.log('nothing to clean')
   },
 
+  // Moves merged tasks and answered decisions off the board into <state>/archive/done-YYYY-MM.md
+  // (the file `state archive` appends to), so nothing is deleted without a record. --dry-run lists only.
+  archive() {
+    const board = load()
+    const tasks = board.tasks.filter((t) => t.status === 'merged')
+    const decisions = board.decisions.filter((d) => d.status === 'answered')
+    const dry = flag('dry-run') || process.argv.includes('-n')
+    for (const t of tasks) console.log(`${dry ? 'would archive' : 'archived'} task ${t.id} (merged${t.pr ? ` #${t.pr}` : ''})`)
+    for (const d of decisions) console.log(`${dry ? 'would archive' : 'archived'} decision ${d.id} (answered: ${d.title})`)
+    if (!tasks.length && !decisions.length) return void console.log('nothing to archive')
+    if (dry) return
+    const day = now().slice(0, 10)
+    const file = path.join(STATE_DIR, 'archive', `done-${day.slice(0, 7)}.md`)
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const entries = [
+      ...tasks.map((t) => `- task ${t.id}${t.repo ? ` · ${t.repo}` : ''}${t.pr ? ` · #${t.pr}` : ''} — merged${t.mergedAt ? ` ${t.mergedAt}` : ''}${t.detail ? ` — ${t.detail}` : ''}`),
+      ...decisions.map((d) => `- decision ${d.id}: ${d.title} — ${d.answer || 'answered'}${d.url ? ` — ${d.url}` : ''}`)
+    ]
+    if (!fs.existsSync(file)) fs.writeFileSync(file, `# Done ${day.slice(0, 7)}\n`)
+    fs.appendFileSync(file, `\n## ${day} (board)\n${entries.join('\n')}\n`)
+    board.tasks = board.tasks.filter((t) => !tasks.includes(t))
+    board.decisions = board.decisions.filter((d) => !decisions.includes(d))
+    log(board, `archived: ${[...tasks.map((t) => t.id), ...decisions.map((d) => `decision ${d.id}`)].join(', ')}`)
+    save(board)
+  },
+
   'instruction:add'(text) {
     if (!text) throw new Error('usage: instruction:add <text>')
     const board = load()
@@ -655,6 +681,7 @@ commands:
   agent:set <name> <${AGENT_STATES.join('|')}> [--id <dispatch>] [--repo ..] [--role ..] [--detail ..]
   agent:rm <name>                     remove an agent from the board (never the coordinator)
   clean                               prune idle/stopped agents and answered decisions
+  archive [--dry-run]                 move merged tasks and answered decisions to archive/done-YYYY-MM.md
   instruction:add <text>              record a standing instruction from the human
   instruction:set <id> [--status ${INSTRUCTION_STATES.join('|')}] [--text ..]
   ask <title> [--repo ..] [--url ..] [--action <verb>] [--context ..] [--options "id:Label*|id:Label"] [--recommend <id>] [--settles-when ${SETTLES_WHEN.join('|')}] [--oncall]

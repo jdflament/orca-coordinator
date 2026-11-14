@@ -307,12 +307,12 @@ function runCleanup(dir: string, dryRun: boolean): Promise<CleanupResult> {
       if (error) return reject(error)
       const lines = String(stdout).trim().split('\n').filter(Boolean)
       const summary = lines.at(-1) ?? ''
-      const counts = summary.match(/released (\d+) sessions, removed (\d+) worktrees, kept (\d+)/)
+      const counts = summary.match(/released (\d+) sessions, removed (\d+) worktrees, kept (\d+)(?:[^,]*, archived (\d+))?/)
       resolve({
         summary,
         actions: lines.slice(0, -1),
         dryRun,
-        ...(counts ? { counts: { released: Number(counts[1]), removed: Number(counts[2]), kept: Number(counts[3]) } } : {})
+        ...(counts ? { counts: { released: Number(counts[1]), removed: Number(counts[2]), kept: Number(counts[3]), archived: Number(counts[4] ?? 0) } } : {})
       })
     })
   })

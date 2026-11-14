@@ -162,7 +162,7 @@ const QUESTIONS = [
   { key: 'person.tone', flag: 'tone', ask: 'Writing style (optional, empty for none)' },
   { key: 'person.uiTermsLanguage', flag: 'ui-language', ask: 'Language UI labels are quoted in' },
   { key: 'paths.workspace', flag: 'workspace', ask: 'Orca workspace folder that hosts the coordinator', choices: listMainWorktrees },
-  { key: 'paths.worktreeRoot', flag: 'worktree-root', ask: 'Folder where Orca creates worktrees (cleanup only touches these)' },
+  { key: 'paths.worktreeRoot', flag: 'worktree-root', ask: 'Folder where Orca creates worktrees (optional: narrows what cleanup may remove)' },
   { key: 'agents.coordinator.agent', flag: 'coordinator-agent', ask: 'Agent id for the coordinator (empty: the agent Orca reports)' },
   { key: 'agents.worker.agent', flag: 'worker-agent', ask: 'Agent id for workers (empty: the coordinator\'s own)' },
   { key: 'agents.automation.provider', flag: 'automation-provider', ask: 'Agent id automations start when no coordinator is live (empty: Orca\'s default)' },
