@@ -159,8 +159,7 @@ test('fixtures and panel copy are neutral: DEMO ids, example-org, no "draft" or 
   assert.doesNotMatch(fixture, /PROJ-|acme|checkout|support confirms/i)
   assert.match(fixture, /DEMO-1\d\d/)
   const panel = fs.readFileSync(path.join(ROOT, 'plugin', 'panel', 'index.html'), 'utf8')
-  // The three settings helper lines are rewritten in the settings-models PR (#7).
-  const copy = panel.split('\n').filter((l) => !/field\('(Name|Language|Tone)'/.test(l)).join('\n')
+  const copy = panel
   assert.doesNotMatch(copy, /draft/i)
   assert.doesNotMatch(copy, /adds tickets/)
 })
