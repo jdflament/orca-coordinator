@@ -236,6 +236,14 @@ export interface ConfigPatch {
   reposLoaded?: string[]
 }
 
+export type BoardRemoveKind = 'task' | 'workstream' | 'agent'
+
+/** What a removal took off the board; the panel keeps it for a few seconds so Undo can put it back. */
+export interface BoardRemoval {
+  kind: BoardRemoveKind
+  item: Record<string, unknown>
+}
+
 /** counts: parsed from the summary line ("would …" in a dry run); absent when it does not match. */
 export interface CleanupResult {
   summary: string
@@ -259,6 +267,12 @@ declare module 'orca' {
     /** Types text + Enter into the coordinator terminal, or queues it in inbox.jsonl when offline. */
     'board.send': { input: { text: string }; output: { sent: boolean; queued: boolean } }
     /** Runs <coordinatorDir>/bin/cleanup (dryRun: with -n, changing nothing) and returns its summary line and actions. */
+    /** Removes a task (id), workstream (id) or agent (name) through bin/board. Rejects the coordinator and an agent that is working. */
+    'board.remove': { input: { kind: BoardRemoveKind; id: string }; output: BoardRemoval }
+    /** Closes an idle or finished-but-open worker session (orca orchestration worker-release). Rejects a working worker, one needing input and the coordinator; cannot be undone. */
+    'board.closeSession': { input: { dispatchId: string }; output: { closed: boolean } }
+    /** Undo: adds a removed item back through bin/board. */
+    'board.restore': { input: { removal: BoardRemoval }; output: { restored: boolean } }
     'board.cleanup': { input: { dryRun?: boolean }; output: CleanupResult }
     /**
      * Shows a configured repo's changes natively: its workspace + Source Control (needs

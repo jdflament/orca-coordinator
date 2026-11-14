@@ -883,6 +883,62 @@ test('board.get writes worker-terminals for the status line: each worker termina
   ])
 })
 
+// board.remove / board.restore: the real bin/board.mjs edits board.json; no other file changes.
+const BOARD_CLI = new URL('../../bin/board.mjs', import.meta.url).pathname
+
+function removableState(): string {
+  const dir = stateFolder()
+  writeFileSync(join(dir, 'bin', 'board'), `#!/bin/sh\nCOORDINATOR_BOARD='${join(dir, 'board.json')}' exec '${process.execPath}' '${BOARD_CLI}' "$@"\n`)
+  chmodSync(join(dir, 'bin', 'board'), 0o755)
+  return dir
+}
+
+const readBoard = (dir: string) => JSON.parse(readFileSync(join(dir, 'board.json'), 'utf8'))
+
+test('board.remove: a task, a workstream and an idle agent leave board.json; Undo puts each back with its fields', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = removableState()
+    execFileSync(join(dir, 'bin', 'board'), ['agent:set', 'old-review', 'idle', '--repo', 'api', '--detail', 'done earlier'])
+    const before = readBoard(dir)
+    const task = before.tasks[0]
+    const ws = before.workstreams[0]
+    const agent = before.agents.find((a: { name: string; state: string }) => a.name !== 'coordinator' && a.state !== 'working')
+    assert.ok(task && ws && agent, 'fixture has one of each')
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    const removals = [
+      await worker.request('board.remove', { kind: 'task', id: task.id }),
+      await worker.request('board.remove', { kind: 'workstream', id: ws.id }),
+      await worker.request('board.remove', { kind: 'agent', id: agent.name })
+    ]
+    const after = readBoard(dir)
+    assert.ok(!after.tasks.some((t: { id: string }) => t.id === task.id))
+    assert.ok(!after.workstreams.some((w: { id: string }) => w.id === ws.id))
+    assert.ok(!after.agents.some((a: { name: string }) => a.name === agent.name))
+    for (const removal of removals) assert.deepEqual(await worker.request('board.restore', { removal }), { restored: true })
+    const restored = readBoard(dir)
+    const pick = (item: Record<string, unknown>, keys: string[]) => Object.fromEntries(keys.filter((k) => item[k] !== undefined && item[k] !== '').map((k) => [k, item[k]]))
+    assert.deepEqual(pick(restored.tasks.find((t: { id: string }) => t.id === task.id), ['id', 'status', 'repo', 'detail', 'url']), pick(task, ['id', 'status', 'repo', 'detail', 'url']))
+    assert.equal(restored.workstreams.find((w: { id: string }) => w.id === ws.id).title, ws.title)
+    assert.equal(restored.agents.find((a: { name: string }) => a.name === agent.name).state, agent.state)
+    await worker.deactivate()
+  })
+})
+
+test('board.remove refuses the coordinator, a working agent and unknown items, and leaves board.json untouched', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = removableState()
+    const working = readBoard(dir).agents.find((a: { state: string }) => a.state === 'working')
+    const bytes = readFileSync(join(dir, 'board.json'), 'utf8')
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    await assert.rejects(worker.request('board.remove', { kind: 'agent', id: 'coordinator' }), /coordinator/)
+    if (working) await assert.rejects(worker.request('board.remove', { kind: 'agent', id: working.name }), /working/)
+    await assert.rejects(worker.request('board.remove', { kind: 'task', id: 'NOPE-1' }), /no task/)
+    await assert.rejects(worker.request('board.remove', { kind: 'worker', id: 'ctx_1' } as never), /required/)
+    assert.equal(readFileSync(join(dir, 'board.json'), 'utf8'), bytes)
+    await worker.deactivate()
+  })
+})
+
 /** A home where Claude Code and OpenCode are installed (their config folders exist) and the user has a settings.json. */
 function agentHome(home: string): { settings: string; before: string } {
   mkdirSync(join(home, '.claude/skills'), { recursive: true })
@@ -1065,4 +1121,48 @@ test('board.get canStart: Start coordinator shows only when set up and not runni
       await worker.deactivate()
     })
   })
+})
+
+// board.closeSession: an idle or finished-but-open worker is released through Orca; nothing else is.
+const SESSIONS = [
+  { dispatchId: 'ctx_run', state: 'running', outcome: 'in_progress', terminal: 'term_w1', taskId: 'task_1' },
+  { dispatchId: 'ctx_done', state: 'succeeded', outcome: 'succeeded', terminalState: 'retained', terminal: 'term_w2', taskId: 'task_2' },
+  { dispatchId: 'ctx_self', state: 'succeeded', outcome: 'succeeded', terminalState: 'retained', terminal: 'term_coord', taskId: 'task_3' }
+]
+const releases = (log: string) => readFileSync(log, 'utf8').split('\n').filter((line) => line.startsWith('orchestration worker-release'))
+
+test('board.closeSession: releases a finished-but-open session once; board.get lists it as idle before and not after', async () => {
+  await withFakeOrca(true, async (log) => {
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
+    const before = (await worker.request('board.get')) as { workers: { dispatchId: string; status: string }[] }
+    assert.deepEqual(before.workers.map((w) => [w.dispatchId, w.status]), [['ctx_run', 'working'], ['ctx_done', 'idle']], 'the coordinator terminal is never listed')
+    assert.deepEqual(await worker.request('board.closeSession', { dispatchId: 'ctx_done' }), { closed: true })
+    assert.deepEqual(releases(log), ['orchestration worker-release --dispatch ctx_done'])
+    await worker.deactivate()
+  }, undefined, SESSIONS)
+})
+
+test('board.closeSession refuses a working worker, the coordinator terminal and unknown ids: no release', async () => {
+  await withFakeOrca(true, async (log) => {
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
+    await assert.rejects(worker.request('board.closeSession', { dispatchId: 'ctx_run' }), /working/)
+    await assert.rejects(worker.request('board.closeSession', { dispatchId: 'ctx_self' }), /coordinator/)
+    await assert.rejects(worker.request('board.closeSession', { dispatchId: 'ctx_nope' }), /no worker session/)
+    assert.deepEqual(releases(log), [])
+    await worker.deactivate()
+  }, undefined, SESSIONS)
+})
+
+test('board.closeSession: when Orca fails to release, the request rejects and the session stays listed', async () => {
+  await withFakeOrca(true, async (log) => {
+    const bin = process.env.ORCA_CLI_BIN_DIR as string
+    const script = readFileSync(join(bin, 'orca'), 'utf8').replace('case "$1 $2" in', 'case "$1 $2" in\n  "orchestration worker-release") echo "release failed" >&2; exit 1 ;;')
+    writeFileSync(join(bin, 'orca'), script)
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
+    await assert.rejects(worker.request('board.closeSession', { dispatchId: 'ctx_done' }), /release failed|Command failed/)
+    const view = (await worker.request('board.get')) as { workers: { dispatchId: string }[] }
+    assert.ok(view.workers.some((w) => w.dispatchId === 'ctx_done'), 'row kept')
+    assert.equal(releases(log).length, 1, 'tried once, no retry')
+    await worker.deactivate()
+  }, undefined, SESSIONS)
 })

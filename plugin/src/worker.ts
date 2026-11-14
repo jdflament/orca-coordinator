@@ -7,7 +7,7 @@ import { appendFileSync, mkdirSync } from 'node:fs'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
-import type { Board, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
+import type { Board, BoardRemoval, BoardRemoveKind, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
 import { listReportedAgents } from './host'
 import { configFile, expandHome, getSetupStatus, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, staleSkillLinks, updateIfInstalledHere, updateLinks } from './setup'
 import { linkHost } from './links'
@@ -89,9 +89,11 @@ async function writeWorkerTerminals(workers: OrcaWorker[]): Promise<void> {
   if ((await readFile(file, 'utf8').catch(() => null)) !== text) await writeFile(file, text)
 }
 
-function getActiveWorkers({ workers, titleOf }: Awaited<ReturnType<typeof listWorkers>>): LiveWorker[] {
+function getActiveWorkers({ workers, titleOf }: Awaited<ReturnType<typeof listWorkers>>, coordinator: string): LiveWorker[] {
+  // A finished worker whose terminal is still open is listed as idle, so it can be closed from the panel.
+  const isOpenFinished = (worker: OrcaWorker) => FINISHED_STATES.includes(String(worker.state)) && worker.terminalState === 'retained' && Boolean(worker.terminal) && worker.terminal !== coordinator
   return workers
-    .filter((worker) => !FINISHED_STATES.includes(String(worker.state)))
+    .filter((worker) => !FINISHED_STATES.includes(String(worker.state)) || isOpenFinished(worker))
     .map((worker) => {
       const state = String(worker.state)
       const outcome = String(worker.outcome ?? '')
@@ -104,6 +106,24 @@ function getActiveWorkers({ workers, titleOf }: Awaited<ReturnType<typeof listWo
         needsInput
       }
     })
+}
+
+/**
+ * Closes a worker session through Orca (worker-release). Only an idle or finished-but-open
+ * worker: a working one, one that needs input, the coordinator's own terminal and unknown ids are refused.
+ */
+async function closeSession(dispatchId: string): Promise<{ closed: boolean }> {
+  if (!dispatchId) throw invalid('dispatchId is required')
+  const { workers } = await listWorkers()
+  const worker = workers.find((w) => String(w.dispatchId) === dispatchId)
+  if (!worker) throw invalid(`no worker session ${dispatchId}`)
+  const coordinator = await getCoordinatorHandle().catch(() => '')
+  if (coordinator && worker.terminal === coordinator) throw invalid('the coordinator is never closed')
+  const finished = FINISHED_STATES.includes(String(worker.state))
+  const needsInput = /input|blocked|question|escalat/i.test(`${worker.state} ${worker.outcome ?? ''}`)
+  if (!finished && getWorkerStatus(String(worker.state), String(worker.outcome ?? ''), needsInput) !== 'idle') throw invalid(`${dispatchId} is working: stop it first`)
+  await runOrca(['orchestration', 'worker-release', '--dispatch', dispatchId])
+  return { closed: true }
 }
 
 // ---- local work derived from the configured repos' git state ----
@@ -240,7 +260,7 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
   const [list, coordinatorLive] = await Promise.all([listWorkers().catch(() => null), handle ? getIsCoordinatorLive(handle).catch(() => false) : Promise.resolve(false)])
   const config = await getConfig().catch(() => null)
   const derived = await getDerivedWork(board).catch(() => ({ localWork: [] }))
-  const { workers, agents } = mergeBoardAgents(list ? getActiveWorkers(list) : [], board.agents ?? [])
+  const { workers, agents } = mergeBoardAgents(list ? getActiveWorkers(list, handle) : [], board.agents ?? [])
   const view: BoardView = {
     ...board,
     decisions: withLinkHosts(board.decisions),
@@ -276,6 +296,51 @@ function runCleanup(dir: string, dryRun: boolean): Promise<CleanupResult> {
       })
     })
   })
+}
+
+// ---- manual clean-up: remove one board item (through bin/board), restore it on Undo ----
+
+const REMOVE_VERBS: Record<BoardRemoveKind, { rm: string; add: string; key: 'id' | 'name' }> = {
+  task: { rm: 'task:rm', add: 'task:add', key: 'id' },
+  workstream: { rm: 'ws:rm', add: 'ws:add', key: 'id' },
+  agent: { rm: 'agent:rm', add: 'agent:set', key: 'name' }
+}
+
+function runBoard(dir: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(path.join(dir, 'bin', 'board'), args, { timeout: 10000 }, (error, _out, stderr) => (error ? reject(new Error(String(stderr).trim() || error.message)) : resolve()))
+  })
+}
+
+function invalid(message: string): Error {
+  return Object.assign(new Error(message), { code: 'invalid_params' })
+}
+
+async function removeBoardItem(kind: BoardRemoveKind, id: string): Promise<BoardRemoval> {
+  const verbs = REMOVE_VERBS[kind]
+  if (!verbs || !id) throw invalid('kind and id are required')
+  const dir = await stateDir()
+  const board = await readJson<Board>(path.join(dir, 'board.json'), { version: 2 })
+  const list = (kind === 'task' ? board.tasks : kind === 'workstream' ? board.workstreams : board.agents) ?? []
+  const item = (list as unknown as Record<string, unknown>[]).find((entry) => String(entry[verbs.key]) === id)
+  if (!item) throw invalid(`no ${kind} ${id} on the board`)
+  if (kind === 'agent' && (id === 'coordinator' || item.role === 'coordinator')) throw invalid('the coordinator is never removed')
+  if (kind === 'agent' && item.state === 'working') throw invalid(`${id} is working: stop it first`)
+  await runBoard(dir, [verbs.rm, id])
+  return { kind, item }
+}
+
+/** Puts a removed item back through the same board verbs, with the fields it had. */
+async function restoreBoardItem(removal: BoardRemoval): Promise<{ restored: boolean }> {
+  const verbs = REMOVE_VERBS[removal?.kind]
+  const item = removal?.item
+  if (!verbs || !item || typeof item[verbs.key] !== 'string') throw invalid('nothing to restore')
+  const fields = removal.kind === 'agent' ? ['id', 'repo', 'role', 'detail'] : removal.kind === 'task' ? ['ws', 'repo', 'status', 'pr', 'url', 'detail'] : ['title', 'url', 'status', 'progress', 'notes']
+  const args = fields.flatMap((field) => (item[field] === undefined || item[field] === null || item[field] === '' ? [] : [`--${field}`, String(item[field])]))
+  if (removal.kind === 'agent') args.unshift(String(item.state ?? 'idle'))
+  if (item.oncall === true) args.push('--oncall')
+  await runBoard(await stateDir(), [verbs.add, String(item[verbs.key]), ...args])
+  return { restored: true }
 }
 
 /** "<option> <decision>" is a decision click only when the board has that pending decision with that option. */
@@ -381,6 +446,9 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { sent: true, queued: false }
   })
 
+  orca.panels.handle('board.remove', ({ kind, id }) => removeBoardItem(kind, String(id ?? '')))
+  orca.panels.handle('board.closeSession', ({ dispatchId }) => closeSession(String(dispatchId ?? '')))
+  orca.panels.handle('board.restore', ({ removal }) => restoreBoardItem(removal))
   orca.panels.handle('board.cleanup', async (input) => runCleanup(await stateDir(), input?.dryRun === true))
 
   orca.panels.handle('board.switch', async ({ terminal }) => {
