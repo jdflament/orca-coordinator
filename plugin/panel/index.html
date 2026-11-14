@@ -106,6 +106,10 @@
       /* Decision cards (Needs you): the one multi-line item. */
       .item { margin: 0 8px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
       .item:last-child { border-bottom: 0; }
+      /* A new Needs you item: an accent wash that fades out over a few seconds (reduced motion: the wash stays until the next refresh). */
+      .is-new { animation: arrive 4s ease-out; border-radius: var(--radius-sm); }
+      @keyframes arrive { from { background: color-mix(in srgb, var(--primary) 22%, transparent); box-shadow: inset 2px 0 0 var(--primary); } to { background: transparent; box-shadow: inset 2px 0 0 transparent; } }
+      @media (prefers-reduced-motion: reduce) { .is-new { animation: none; background: color-mix(in srgb, var(--primary) 12%, transparent); } }
       .item .top { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
       .item .verb { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
       .item .what { color: var(--muted); margin: 2px 0 6px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
@@ -236,6 +240,8 @@
       const DONE_SHOWN = 15
       const SENT_LOCK_MS = 5000
       const decisionLockedUntil = new Map()
+      // Needs you ids this panel session already showed: only others pulse. Null until the first render (what is there at open is not new).
+      let seenNeeds = null
       let configured = null
       let settingsOpen = false
       let setupShown = false
@@ -421,7 +427,7 @@
 
       function renderDecision(decision, tag) {
         const answered = decision.status === 'answered'
-        const card = el('div', 'item')
+        const card = el('div', decision.isNew ? 'item is-new' : 'item')
         const top = el('div', 'top')
         // The verb is shown only when no button already says it.
         const said = list(decision.options).some((option) => text(option?.label ?? option?.id ?? option).toLowerCase() === text(decision.action).toLowerCase())
@@ -453,7 +459,7 @@
       }
 
       function renderWorkerRow(worker, tag) {
-        const node = el('div', 'wrow')
+        const node = el('div', worker.isNew ? 'wrow is-new' : 'wrow')
         const title = el('span', 'trunc', worker.title)
         title.style.flex = '0 1 auto'
         node.append(...(tag && worker.repo ? [repoLabel(worker.repo)] : []), title, el('span', 'meta-text trunc grow', worker.detail), state(worker.status))
@@ -633,7 +639,14 @@
         ])
       }
 
+      // The ids Needs you shows, as board.get's `seen` names them.
+      function needsIds(board) {
+        return [...list(board.decisions).filter((d) => d.status !== 'answered').map((d) => 'd:' + d.id), ...list(board.workers).filter((w) => w.needsInput).map((w) => 'w:' + w.dispatchId)]
+      }
+
       function render(board) {
+        const ids = needsIds(board)
+        seenNeeds = new Set([...(seenNeeds ?? []), ...ids])
         repoColors = board.repoColors && typeof board.repoColors === 'object' ? board.repoColors : {}
         oncallLabel = text(board.oncallLabel) || 'Priority'
         // board.get already merged each board agent into its live worker (same id, else name = title).
@@ -1123,20 +1136,24 @@
       }
 
       async function refresh() {
+        let step = 'Could not load the board: '
         try {
           if (settingsOpen) return
           if (configured !== true) {
+            step = 'Could not check the setup: '
             // The setup form is filled in by hand: the periodic refresh must not wipe it.
             if (setupShown && !byId('setup').hidden) return
             const status = await orca.plugin.request('setup.status')
             configured = status?.configured === true
             if (!configured) return renderSetup(status || {})
             showSetup(false)
+            step = 'Could not load the board: '
           }
-          const board = await orca.plugin.request('board.get')
+          // Host request input is JSON: an `undefined` value (the first load has no `seen`) is refused as "input: Invalid input".
+          const board = await orca.plugin.request('board.get', seenNeeds ? { seen: [...seenNeeds] } : {})
           render(board && typeof board === 'object' ? board : {})
         } catch (error) {
-          byId('updated').textContent = 'error: ' + error.message
+          byId('updated').textContent = step + error.message
         }
       }
 

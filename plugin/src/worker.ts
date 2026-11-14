@@ -225,8 +225,34 @@ function withLinkHosts<T extends { url?: string }>(items: T[] | undefined): T[] 
   })
 }
 
-async function getBoard(): Promise<BoardView> {
+const RECONCILE_EVERY_MS = 60000
+const RECONCILE_TIMEOUT_MS = 10000
+let lastReconcile = 0
+
+/**
+ * Settles decisions whose "settles when" is met (`bin/board reconcile`: gh, no model). At most once
+ * a minute, short timeout, never awaited by the render; a failure is logged, never shown.
+ */
+function reconcileDecisions(dir: string): void {
+  const nowMs = Date.now()
+  if (nowMs - lastReconcile < RECONCILE_EVERY_MS) return
+  lastReconcile = nowMs
+  execFile(path.join(dir, 'bin', 'board'), ['reconcile'], { timeout: RECONCILE_TIMEOUT_MS }, (error, _stdout, stderr) => {
+    if (error || String(stderr).trim()) console.error(`coordinator: reconcile: ${String(stderr).trim() || error?.message}`)
+  })
+}
+
+/** Marks what is new to this panel session: `seen` is what it already showed; no `seen` (the first load) marks nothing. */
+function markNew(view: BoardView, seen: string[] | undefined): void {
+  if (!seen) return
+  const known = new Set(seen)
+  for (const decision of view.decisions ?? []) if (decision.status !== 'answered' && !known.has(`d:${decision.id}`)) decision.isNew = true
+  for (const worker of view.workers) if (worker.needsInput && !known.has(`w:${worker.dispatchId}`)) worker.isNew = true
+}
+
+async function getBoard(seen?: string[]): Promise<BoardView> {
   const dir = await stateDir()
+  reconcileDecisions(dir)
   const board = await readJson<Board>(path.join(dir, 'board.json'), { version: 2 })
   const read = await readJson<PanelJson>(path.join(dir, 'panel.json'), {})
   const panel: PanelJson = read && typeof read === 'object' ? read : {}
@@ -235,7 +261,7 @@ async function getBoard(): Promise<BoardView> {
   const config = await getConfig().catch(() => null)
   const derived = await getDerivedWork(board).catch(() => ({ localWork: [] }))
   const { workers, agents } = mergeBoardAgents(list ? getActiveWorkers(list, handle) : [], board.agents ?? [])
-  return {
+  const view: BoardView = {
     ...board,
     decisions: withLinkHosts(board.decisions),
     workstreams: withLinkHosts(board.workstreams),
@@ -250,6 +276,8 @@ async function getBoard(): Promise<BoardView> {
     repoColors: panel.repoColors ?? {},
     oncallLabel: panel.oncallLabel ?? ''
   }
+  markNew(view, seen)
+  return view
 }
 
 /** Runs <dir>/bin/cleanup (with -n: a dry run that changes nothing) and reads its summary line. */
@@ -400,7 +428,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('config.save', ({ patch }) => saveSettings(patch))
   orca.panels.handle('config.removeRepo', ({ path: target }) => removeSkippedRepo(String(target ?? '')))
 
-  orca.panels.handle('board.get', () => getBoard())
+  orca.panels.handle('board.get', (input) => getBoard(Array.isArray(input?.seen) ? input.seen.map(String) : undefined))
   orca.panels.handle('work.openChanges', ({ repo }) => openRepoChanges(String(repo ?? '')))
   orca.panels.handle('agents.openBoard', () => openWorkspaceBoard())
 
@@ -430,6 +458,7 @@ export default function activate(orca: OrcaWorkerApi): void {
 }
 
 export function deactivate(): void {
+  lastReconcile = 0
   settings = null
   host = null
 }

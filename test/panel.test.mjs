@@ -54,9 +54,7 @@ test('the first board.get sends params that are valid JSON (no undefined `seen`)
   assert.doesNotMatch(String(panel.byId('updated').textContent), /Invalid input/)
 })
 
-// From #3 (needs-you-sync): runs once that panel change is in this branch's history.
-const hasBoardLoadMessage = html.includes('Could not load the board')
-test('a failed board load says what failed, not a bare "error: …"', { skip: !hasBoardLoadMessage && 'needs #3 (needs-you-sync)' }, async () => {
+test('a failed board load says what failed, not a bare "error: …"', async () => {
   const panel = mountPanel({ 'setup.status': () => ({ configured: true }), 'board.get': () => { throw new Error('worker exploded') } })
   await settle()
   assert.equal(panel.byId('updated').textContent, 'Could not load the board: worker exploded')

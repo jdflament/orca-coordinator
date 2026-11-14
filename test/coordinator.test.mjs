@@ -385,3 +385,15 @@ test('init on a new machine writes rules.optional: [] (off); an existing config 
   assert.equal(old.run(CLI, initArgs).status, 0)
   assert.equal(readConfig(old.configPath).rules, undefined, 'no key written: all optional rules stay on')
 })
+
+test('render: the onboarding-scan playbook runs in the coordinator (no worker preamble) and the session rule points at it', () => {
+  const box = sandbox()
+  assert.equal(box.run(CLI, ['render']).status, 0)
+  const scan = fs.readFileSync(path.join(box.state, 'playbooks', 'onboarding-scan.md'), 'utf8')
+  assert.ok(scan.startsWith('---\nrunner: coordinator'), 'no worker preamble')
+  assert.ok(!scan.includes('{{'))
+  assert.match(scan, new RegExp(`${box.state}/bin/scan`))
+  assert.ok(fs.statSync(path.join(box.state, 'bin', 'scan')).mode & 0o100, 'scan wrapper is executable')
+  const rules = fs.readFileSync(path.join(box.state, 'COORDINATOR.md'), 'utf8')
+  assert.match(rules, /rescan.*onboarding-scan\.md/s)
+})
