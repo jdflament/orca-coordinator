@@ -103,6 +103,41 @@ test('board.get merges the board with live workers, liveness and panel.json', as
   })
 })
 
+test('board.get runs `bin/board reconcile` at most once a minute, without waiting for it, and a failing run changes nothing in the view', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    const runs = join(dir, 'reconcile-runs')
+    writeFileSync(join(dir, 'bin', 'board'), `#!/bin/sh\necho "$@" >> "${runs}"\necho "gh down" >&2\nexit 1\n`)
+    chmodSync(join(dir, 'bin', 'board'), 0o755)
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    const first = await worker.request('board.get')
+    await worker.request('board.get')
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    assert.equal(readFileSync(runs, 'utf8'), 'reconcile\n', 'two refreshes inside a minute: one run')
+    assert.equal(first.decisions?.length, 3, 'a failing reconcile never breaks the render')
+    await worker.deactivate()
+  })
+})
+
+test('board.get marks only Needs you ids the panel has not seen as new (none on the first load)', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    const first = await worker.request('board.get')
+    assert.deepEqual([...(first.decisions ?? []), ...first.workers].filter((item) => item.isNew), [], 'what is there when the panel opens is not new')
+    const next = await worker.request('board.get', { seen: ['d:1', 'w:ctx_2'] })
+    assert.deepEqual(
+      (next.decisions ?? []).filter((d) => d.isNew).map((d) => d.id),
+      [2],
+      'decision 2 is pending and unseen; the answered decision 3 is not in Needs you'
+    )
+    assert.deepEqual(next.workers.filter((w) => w.isNew), [], 'a seen worker is not new, a working one is not in Needs you')
+    const seenAll = await worker.request('board.get', { seen: ['d:1', 'd:2', 'w:ctx_2'] })
+    assert.deepEqual([...(seenAll.decisions ?? []), ...seenAll.workers].filter((item) => item.isNew), [])
+    await worker.deactivate()
+  })
+})
+
 test('board.get: a known link host gets an icon label; an unknown host, a missing url or a non-http url gets none', async () => {
   await withFakeOrca(true, async () => {
     const dir = stateFolder()
