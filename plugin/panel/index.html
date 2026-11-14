@@ -65,10 +65,7 @@
       .notice span { flex: 1; min-width: 0; }
 
       .focus { color: var(--muted); padding: 8px 12px 0; }
-      .stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
-      .stat { min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-      .stat b { font-weight: 600; margin-right: 4px; }
-      .stat span { color: var(--muted); font-size: 11px; }
+      .focus:empty { display: none; }
 
       /* Section headers: px-3 pt-2, 10px semibold uppercase tracking-wider muted. */
       h2 { font-size: 10px; line-height: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0; padding: 12px 12px 4px; display: flex; gap: 6px; }
@@ -76,24 +73,28 @@
       h2.link:hover { color: var(--fg); }
       h2 .count { font-weight: 400; text-transform: none; letter-spacing: 0; color: color-mix(in srgb, var(--muted) 60%, transparent); }
       section:empty { display: none; }
-      a { color: inherit; cursor: pointer; text-decoration: none; }
+      /* Affordance = behaviour: only what does something (.go: a link with a url, a row with an action) gets a pointer, hover or underline. */
+      a { color: inherit; text-decoration: none; }
+      a.go, .go { cursor: pointer; }
       a .host { display: inline-flex; vertical-align: -2px; margin-right: 4px; color: var(--muted); }
       a .host svg { width: 12px; height: 12px; }
 
-      a:hover { text-decoration: underline; }
+      a.go:hover { text-decoration: underline; }
       .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; opacity: 0.6; }
       .dot.live { background: var(--green); opacity: 1; }
 
       /* List rows: one line, text-xs, py-1 px-1 rounded, hover bg-accent/50; everything truncates. */
       .row, .wk, .wrow { display: flex; align-items: center; gap: 8px; min-height: 24px; margin: 0 8px; padding: 0 4px; border-radius: var(--radius-sm); min-width: 0; white-space: nowrap; }
       .row > *, .wk > *, .wrow > * { min-width: 0; }
-      .row:hover, .wk:hover, .wrow:hover { background: var(--hover); color: var(--accent-fg); }
-      .wrow { cursor: pointer; }
-      .grow { flex: 1 1 auto; }
+      .row.go:hover, .wk.go:hover, .wrow.go:hover, .grp.go:hover { background: var(--hover); color: var(--accent-fg); }
+      .grow { flex: 1 1 0; }
       .trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .meta-text { color: color-mix(in srgb, var(--muted) 70%, transparent); font-size: 11px; }
       .act { visibility: hidden; }
       .row:hover .act, .wk:hover .act, .feature:hover .act, .wrow:hover .act, .act.keep { visibility: visible; }
+      /* Group header (repository): quiet, once per repo; clickable only when it has an action. */
+      .grp { display: flex; align-items: center; gap: 8px; min-height: 20px; margin: 8px 8px 0; padding: 0 4px; border-radius: var(--radius-sm); min-width: 0; white-space: nowrap; }
+      .grp .repo { max-width: 50%; }
       .repo { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; flex: none; max-width: 35%; overflow: hidden; }
       .fixed { flex: none; overflow: visible; }
       .repo i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
@@ -190,7 +191,6 @@
       <section id="settings" class="settings" hidden></section>
       <div id="board">
         <div id="focus" class="focus trunc"></div>
-        <div id="stats" class="stats"></div>
         <section id="instructions"></section>
         <section id="needs"></section>
         <section id="work"></section>
@@ -227,21 +227,63 @@
       let settingsOpen = false
       let setupShown = false
       const byId = (id) => document.getElementById(id)
-      const list = (value) => (Array.isArray(value) ? value : [])
-      const text = (value) => (value === undefined || value === null ? '' : String(value))
 
       function el(tag, className, value) {
         const node = document.createElement(tag)
         if (className) node.className = className
-        if (text(value) !== '') { node.textContent = text(value); node.title = text(value) }
+        // A tooltip only where the text can be cut off (it then shows the whole).
+        if (text(value) !== '') { node.textContent = text(value); if (/\b(trunc|note|what)\b/.test(className || '')) node.title = text(value) }
         return node
       }
+
+      // <pure> (no DOM: test/panel.test.mjs runs this block as is)
+      const list = (value) => (Array.isArray(value) ? value : [])
+      const text = (value) => (value === undefined || value === null ? '' : String(value))
+      function getWorkItems(board) {
+        const prs = list(board.repos).map((repo) => ({ ...repo, pr: repo.pr ?? text(repo.name).replace('#', '') }))
+        return [...list(board.tasks), ...prs]
+      }
+      const canOpen = (url) => typeof url === 'string' && url !== ''
+
+      // Entries (with a repo) grouped by repo in first-seen order. A repo with fewer than `min` entries stays
+      // inline with its repo tag (tag: true); an entry without a repo never gets one.
+      function groupByRepo(entries, min) {
+        const counts = new Map()
+        for (const entry of entries) if (entry.repo) counts.set(entry.repo, (counts.get(entry.repo) || 0) + 1)
+        const groups = []
+        for (const entry of entries) {
+          const grouped = entry.repo && counts.get(entry.repo) >= min
+          const home = grouped ? groups.find((g) => g.repo === entry.repo) : null
+          if (home) home.entries.push(entry)
+          else groups.push(grouped ? { repo: entry.repo, entries: [entry] } : { repo: '', tag: Boolean(entry.repo), entries: [entry] })
+        }
+        return groups
+      }
+
+      // Work by repository: a workstream sits in the repo most of its items are in; only items from another repo
+      // carry a tag. A repo with local changes and no workstream still gets its group (the header opens them).
+      function planWork(board) {
+        const items = getWorkItems(board)
+        const groups = new Map()
+        const group = (repo) => groups.get(repo) || groups.set(repo, { repo, local: null, streams: [] }).get(repo)
+        for (const ws of list(board.workstreams)) {
+          const own = items.filter((item) => item.ws === ws.id)
+          const counts = new Map()
+          for (const item of own) if (item.repo) counts.set(item.repo, (counts.get(item.repo) || 0) + 1)
+          const home = [...counts].sort((a, b) => b[1] - a[1])[0]?.[0] || ''
+          group(home).streams.push({ ws, items: own.map((item) => ({ item, tag: Boolean(item.repo) && item.repo !== home })) })
+        }
+        for (const work of list(board.localWork)) group(work.repo).local = work
+        return [...groups.values()].sort((a, b) => Number(Boolean(a.repo)) - Number(Boolean(b.repo)))
+      }
+      // </pure>
 
       // A link opens its own url. host (board.get's linkHost) only adds an icon and a label; an unknown host stays a plain link.
       function link(label, url, className, host) {
         const node = el('a', className, label)
-        if (typeof url !== 'string' || !url) return node
+        if (!canOpen(url)) return node
         node.onclick = () => orca.shell?.openExternal(url)
+        node.classList.add('go')
         node.title = url
         if (host && ICONS[host.kind]) {
           const icon = el('span', 'host')
@@ -334,31 +376,17 @@
         }
       }
 
-      function renderStats(board, workers) {
-        const tasks = list(board.tasks)
-        const counts = [
-          ['needs you', list(board.decisions).filter((d) => d.status !== 'answered').length + workers.filter((w) => w.needsInput).length],
-          ['open', getWorkItems(board).filter((item) => !DONE_STATES.includes(item.status)).length],
-          ['blocked', tasks.filter((t) => t.status === 'blocked').length]
-        ]
-        return counts.map(([label, count]) => {
-          const node = el('div', 'stat')
-          const number = el('b', '', String(count))
-          if (label === 'blocked' && count > 0) number.style.color = 'var(--danger)'
-          node.append(number, el('span', '', label))
-          return node
-        })
-      }
-
       function renderInstructions(instructions) {
         return list(instructions).filter((i) => i.status !== 'done').map((i) => el('div', 'item trunc', i.text))
       }
 
-      function renderDecision(decision) {
+      function renderDecision(decision, tag) {
         const answered = decision.status === 'answered'
         const card = el('div', 'item')
         const top = el('div', 'top')
-        top.append(repoLabel(decision.repo), link(decision.title || decision.id, decision.url, 'trunc grow', decision.linkHost), ...oncallBadge(decision), el('span', 'verb', decision.action))
+        // The verb is shown only when no button already says it.
+        const said = list(decision.options).some((option) => text(option?.label ?? option?.id ?? option).toLowerCase() === text(decision.action).toLowerCase())
+        top.append(...(tag ? [repoLabel(decision.repo)] : []), link(decision.title || decision.id, decision.url, 'trunc grow', decision.linkHost), ...oncallBadge(decision), ...(said ? [] : [el('span', 'verb', decision.action)]))
         const actions = el('div', 'actions')
         const sent = (decisionLockedUntil.get(decision.id) ?? 0) > Date.now()
         const sentNote = el('span', 'muted', 'sent')
@@ -385,12 +413,16 @@
         return card
       }
 
-      function renderWorkerRow(worker) {
+      function renderWorkerRow(worker, tag) {
         const node = el('div', 'wrow')
         const title = el('span', 'trunc', worker.title)
         title.style.flex = '0 1 auto'
-        node.append(...(worker.repo ? [repoLabel(worker.repo)] : []), title, el('span', 'meta-text trunc grow', worker.detail), state(worker.status))
-        if (worker.terminal) node.onclick = () => orca.plugin.request('board.switch', { terminal: worker.terminal })
+        node.append(...(tag && worker.repo ? [repoLabel(worker.repo)] : []), title, el('span', 'meta-text trunc grow', worker.detail), state(worker.status))
+        if (worker.terminal) {
+          node.onclick = () => orca.plugin.request('board.switch', { terminal: worker.terminal })
+          node.classList.add('go')
+          node.title = 'Open its terminal'
+        }
         if (worker.status === 'idle') {
           const close = iconButton('x', 'Close session ' + worker.title, (event) => { event.stopPropagation(); confirmClose(worker) })
           node.append(close)
@@ -398,14 +430,26 @@
         return node
       }
 
-      function renderNeeds(decisions, workers) {
-        const pending = [...list(decisions).filter((d) => d.status !== 'answered').map(renderDecision), ...workers.filter((w) => w.needsInput).map(renderWorkerRow)]
-        return pending.length === 0 ? [el('div', 'ok', 'Nothing waiting')] : pending
+      // One header per repo with 2+ entries; a lone one keeps its inline repo tag.
+      function renderGroups(entries) {
+        return groupByRepo(entries, 2).flatMap((g) => [...(g.repo ? [repoHeader(g.repo)] : []), ...g.entries.map((entry) => entry.render(Boolean(g.tag)))])
       }
 
-      function getWorkItems(board) {
-        const prs = list(board.repos).map((repo) => ({ ...repo, pr: repo.pr ?? text(repo.name).replace('#', '') }))
-        return [...list(board.tasks), ...prs]
+      function repoHeader(repo) {
+        const node = el('div', 'grp')
+        node.append(repoLabel(repo))
+        return node
+      }
+
+      function pendingNeeds(decisions, workers) {
+        return [
+          ...list(decisions).filter((d) => d.status !== 'answered').map((d) => ({ repo: d.repo, render: (tag) => renderDecision(d, tag) })),
+          ...workers.filter((w) => w.needsInput).map((w) => ({ repo: w.repo, render: (tag) => renderWorkerRow(w, tag) }))
+        ]
+      }
+
+      function renderNeeds(pending) {
+        return pending.length === 0 ? [el('div', 'ok', 'Nothing waiting')] : renderGroups(pending)
       }
 
       // Removing from the board: the row goes at once, Undo (a few seconds) puts it back through board.restore.
@@ -448,20 +492,20 @@
         return node
       }
 
-      function renderWorkRow(item) {
+      function renderWorkRow({ item, tag }) {
         const nudge = item.status === 'blocked' ? iconButton('retry', 'Nudge ' + item.id, () => sendText('nudge ' + item.id)) : null
         // The item's own url (the coordinator writes it from the tool it used): the PR's when there is one, else the ticket's.
         const pr = item.pr ? [link('#' + item.pr, item.url, 'pr', item.linkHost)] : []
         const id = item.pr ? link(item.id, '', 'trunc') : link(item.id, item.url, 'trunc', item.linkHost)
         id.style.flex = '0 1 auto'
         const node = el('div', 'wk')
-        node.append(repoLabel(item.repo), id, ...pr, ...oncallBadge(item), el('span', 'meta-text trunc grow', item.detail), item.status === 'pr' ? el('span') : state(item.status), ...(nudge ? [nudge] : []), ...(item.name === undefined ? [removeButton('task', item.id)] : []))
+        node.append(...(tag ? [repoLabel(item.repo)] : []), id, ...pr, ...oncallBadge(item), el('span', 'meta-text trunc grow', item.detail), item.status === 'pr' ? el('span') : state(item.status), ...(nudge ? [nudge] : []), ...(item.name === undefined ? [removeButton('task', item.id)] : []))
         return node
       }
 
       function renderWorkGroup(header, items) {
-        const open = items.filter((item) => !DONE_STATES.includes(item.status))
-        const done = items.filter((item) => DONE_STATES.includes(item.status))
+        const open = items.filter(({ item }) => !DONE_STATES.includes(item.status))
+        const done = items.filter(({ item }) => DONE_STATES.includes(item.status))
         if (done.length === 0) return [header, ...open.map(renderWorkRow)]
         const fold = el('details')
         fold.append(el('summary', '', 'Done (' + done.length + ')'), ...done.slice(-DONE_SHOWN).reverse().map(renderWorkRow))
@@ -482,38 +526,40 @@
         return node
       }
 
-      function renderWork(board) {
-        const items = getWorkItems(board)
-        const tracked = list(board.workstreams).flatMap((ws) => {
-          const own = items.filter((item) => item.ws === ws.id)
-          return renderWorkGroup(renderFeatureHeader(ws, own), own)
-        })
-        return [...tracked, ...renderRepoWork(board)]
+      // Repository > workstream > item. The repo header is the local-changes summary and opens Source Control.
+      function renderWork(plan) {
+        return plan.flatMap((group) => [
+          ...(group.repo ? [renderRepoHeader(group)] : []),
+          ...group.streams.flatMap(({ ws, items }) => renderWorkGroup(renderFeatureHeader(ws, items.map(({ item }) => item)), items))
+        ])
       }
 
-      // Local git work the board does not track (derived by the worker): one row per repo; a click
-      // shows that repo's changes in Orca's own Source Control. Workers are in Agents, not here.
-      function renderRepoWork(board) {
-        return list(board.localWork).map((work) => {
-          const counts = [work.changed ? work.changed + ' changed' : '', work.unpushed ? work.unpushed + ' unpushed' : ''].filter(Boolean).join(' · ')
-          const node = el('div', 'wrow')
-          node.append(repoLabel(work.repo), el('span', 'trunc grow', work.branch), el('span', 'meta-text fixed', counts))
-          node.title = 'Open ' + work.repo + ' changes in Source Control'
-          node.onclick = () => orca.plugin.request('work.openChanges', { repo: work.repo }).catch((error) => showResult('Could not open ' + work.repo + ': ' + error.message, [], true))
-          return node
-        })
+      function renderRepoHeader({ repo, local }) {
+        const node = repoHeader(repo)
+        if (!local) return node
+        const counts = [local.changed ? local.changed + ' changed' : '', local.unpushed ? local.unpushed + ' unpushed' : ''].filter(Boolean).join(' · ')
+        node.append(el('span', 'meta-text trunc grow', local.branch), el('span', 'meta-text fixed', counts))
+        node.classList.add('go')
+        node.title = 'Open ' + repo + ' changes in Source Control'
+        node.onclick = () => orca.plugin.request('work.openChanges', { repo }).catch((error) => showResult('Could not open ' + repo + ': ' + error.message, [], true))
+        return node
       }
 
+      function renderAgentRow(agent, tag) {
+        const name = el('span', 'trunc', agent.name)
+        name.style.flex = '0 1 auto'
+        return row([
+          ...(tag && agent.repo ? [repoLabel(agent.repo)] : []), name, el('span', 'meta-text trunc grow', [agent.role === 'worker' ? '' : agent.role, agent.detail].filter(Boolean).join(' · ')), state(agent.state),
+          ...(agent.state === 'working' ? [iconButton('stop', 'Stop ' + agent.name, () => sendText('stop ' + agent.name))] : agent.name === 'coordinator' ? [] : [removeButton('agent', agent.name)])
+        ])
+      }
+
+      // Workers that need you are listed under Needs you only.
       function renderAgents(agents, workers) {
-        const fromBoard = list(agents).map((agent) => {
-          const name = el('span', 'trunc', agent.name)
-          name.style.flex = '0 1 auto'
-          return row([
-            repoLabel(agent.repo), name, el('span', 'meta-text trunc grow', [agent.role === 'worker' ? '' : agent.role, agent.detail].filter(Boolean).join(' · ')), state(agent.state),
-            ...(agent.state === 'working' ? [iconButton('stop', 'Stop ' + agent.name, () => sendText('stop ' + agent.name))] : agent.name === 'coordinator' ? [] : [removeButton('agent', agent.name)])
-          ])
-        })
-        return [...fromBoard, ...workers.map(renderWorkerRow)]
+        return renderGroups([
+          ...list(agents).map((agent) => ({ repo: agent.repo, render: (tag) => renderAgentRow(agent, tag) })),
+          ...workers.filter((w) => !w.needsInput).map((w) => ({ repo: w.repo, render: (tag) => renderWorkerRow(w, tag) }))
+        ])
       }
 
       function render(board) {
@@ -531,11 +577,15 @@
         byId('updated').textContent = 'updated ' + getAgo(board.updatedAt)
         byId('focus').textContent = text(board.focus)
         byId('focus').title = text(board.focus)
-        byId('stats').replaceChildren(...renderStats(board, workers))
         byId('instructions').replaceChildren(...section('Instructions', renderInstructions(board.instructions)))
-        byId('needs').replaceChildren(...section('Needs you', renderNeeds(board.decisions, workers)))
-        byId('work').replaceChildren(...section('Work', renderWork(board), '', 'No work yet. The coordinator adds tickets and tasks here.'))
-        byId('agents').replaceChildren(...linkHeading(section('Agents', renderAgents(agents, workers), busy ? busy + ' working' : '', 'No agents running.'), 'Open the Workspace Board', openBoard))
+        const pending = pendingNeeds(board.decisions, workers)
+        const plan = planWork(board)
+        const planned = plan.flatMap((group) => group.streams.flatMap((stream) => stream.items.map(({ item }) => item)))
+        const open = planned.filter((item) => !DONE_STATES.includes(item.status)).length
+        const blocked = planned.filter((item) => item.status === 'blocked').length
+        byId('needs').replaceChildren(...section('Needs you', renderNeeds(pending), pending.length ? String(pending.length) : ''))
+        byId('work').replaceChildren(...section('Work', renderWork(plan), [open ? open + ' open' : '', blocked ? blocked + ' blocked' : ''].filter(Boolean).join(' · '), 'No work yet.'))
+        byId('agents').replaceChildren(...linkHeading(section('Agents', renderAgents(agents, workers), busy ? busy + ' working' : '', 'No agents.'), 'Open the Workspace Board', openBoard))
       }
 
       // After a plugin update: links that point at an older copy are only shown, never changed without the click.
