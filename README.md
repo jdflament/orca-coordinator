@@ -293,16 +293,25 @@ note to call the script from their own status-line hook.
 
 The plugin worker uses Orca's plugin host API when this Orca offers the method (`orca.host.has`),
 and the `orca` CLI otherwise (`plugin/src/host.ts`). Today the host API covers the project list
-(`project.list`, Orca 1.4.258+). What still goes through the `orca` CLI, and why:
+(`project.list`, Orca 1.4.258+). Capabilities are declared for what the plugin does, CLI or not:
+`terminal:send` (panel clicks typed into the coordinator terminal), `agent:read`,
+`workspace:read` / `workspace:write`, `settings:own`. `automation:read` / `automation:write`
+(`orca-coordinator init` manages automations) are not declared: Orca 1.4.257's manifest
+validator refuses them; add them when `engines.orca` moves to the release that knows them.
 
-- `orchestration worker-list` / `task-list`, `terminal list` / `show`: the live workers, their
-  titles and whether the coordinator terminal runs an agent. The host API's terminal ids are not
-  the `term_…` handles Orca gives dispatched workers and their status line.
-- `terminal send` / `switch`: talk to the coordinator terminal by its handle.
+What still goes through the `orca` CLI, and what would let it switch:
+
+- Terminals by handle (`terminal list` / `show` / `send` / `switch`, `orchestration worker-list` /
+  `task-list`): the coordinator, workers and the status line all use the `term_…` handle. Switch
+  when Orca documents how a `term_` handle maps to the host `terminalId` (`terminal.list`,
+  `terminal.focus`, `terminal.sendText`, `agents.list`, whose `task.title` could then feed the
+  WORKER file).
+- Automations (`automations list/create/edit/remove`): run by `orca-coordinator init`, a node
+  script, which cannot call the worker-only host API. Switch when scripts can reach `automation.*`.
 - `agent launch`, `file open-changed`: start the coordinator, open a repo's changes (fallbacks
   when the host API is refused).
-- `orchestration worker-start`, `worktree`, `terminal rename`, `automations`, `repo list`: run by
-  the coordinator's rules, playbooks and `orca-coordinator init`, not by the panel.
+- `orchestration worker-start`, `worktree`, `terminal rename`, `repo list`: run by the
+  coordinator's rules, playbooks and `init`, not by the panel.
 - `plugin list` / `inspect` / `install`: `orca-coordinator init` and `doctor`.
 
 ## Self-improvement loop

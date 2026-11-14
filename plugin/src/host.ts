@@ -12,9 +12,10 @@ export async function listProjects(host: Host | null, cli: Cli): Promise<Project
   if (host?.has('project.list')) {
     const answer = (await host.call('project.list', {}).catch((error: Error) => {
       throw new Error(`Orca project.list failed: ${error.message}`)
-    })) as { projects?: Project[] } | null
+    })) as { projects?: { id: string; name: string; kind: string; path: string }[] } | null
     if (!Array.isArray(answer?.projects)) throw new Error('Orca project.list returned no projects list')
-    return answer.projects
+    // The host API names a project `name`; the CLI names it `displayName`.
+    return answer.projects.map(({ id, name, kind, path }) => ({ id, path, displayName: name, kind }))
   }
   const response = JSON.parse(await cli(['repo', 'list', '--json'])) as { result?: { repos?: Project[] } }
   return response.result?.repos ?? []

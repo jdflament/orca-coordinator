@@ -793,8 +793,8 @@ function fakeHost(methods: Record<string, () => unknown>): Host & { calls: strin
 }
 
 test('listProjects: the host API answers when Orca offers project.list; the CLI answers when it does not', async () => {
-  const api = fakeHost({ 'project.list': () => ({ projects: [{ id: 'api', path: '/api/repo', displayName: 'api-repo', kind: 'git' }] }) })
-  assert.deepEqual((await listProjects(api, async () => assert.fail('the CLI must not run'))).map((p) => p.id), ['api'])
+  const api = fakeHost({ 'project.list': () => ({ projects: [{ id: 'api', path: '/api/repo', name: 'api-repo', kind: 'git', hostId: 'local' }], truncated: false }) })
+  assert.deepEqual(await listProjects(api, async () => assert.fail('the CLI must not run')), [{ id: 'api', path: '/api/repo', displayName: 'api-repo', kind: 'git' }], 'host rows are mapped to the CLI row shape')
   assert.deepEqual(api.calls, ['project.list'])
 
   const old = fakeHost({})
