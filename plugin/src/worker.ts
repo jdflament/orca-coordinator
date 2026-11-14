@@ -8,7 +8,7 @@ import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { Board, BoardRemoval, BoardRemoveKind, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
-import { listReportedAgents } from './host'
+import { focusTerminal, hostTaskTitles, listCliTerminals, listReportedAgents, sendToTerminal } from './host'
 import { configFile, expandHome, getSetupStatus, modelFor, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, staleSkillLinks, updateIfInstalledHere, updateLinks } from './setup'
 import { linkHost } from './links'
 
@@ -38,18 +38,14 @@ async function runOrca(args: string[], timeout = 10000): Promise<string> {
   })
 }
 
+const cliRun = (args: string[]): Promise<string> => runOrca(args)
+
 async function runOrcaJson(args: string[]): Promise<{ result?: Record<string, unknown> }> {
   return JSON.parse(await runOrca([...args, '--json'])) as { result?: Record<string, unknown> }
 }
 
 async function getCoordinatorHandle(): Promise<string> {
   return (await readFile(path.join(await stateDir(), 'coordinator-terminal'), 'utf8')).trim()
-}
-
-async function getTerminalTitles(): Promise<Map<string, string>> {
-  const response = await runOrcaJson(['terminal', 'list'])
-  const terminals = (response.result?.terminals ?? []) as { handle?: string; title?: string }[]
-  return new Map(terminals.map((terminal) => [String(terminal.handle), String(terminal.title ?? '')]))
 }
 
 async function getTaskTitles(): Promise<Map<string, string>> {
@@ -67,14 +63,15 @@ type OrcaWorker = Record<string, string | null>
 
 /** Every worker Orca still lists (finished ones included), with a title from its task, else its terminal. */
 async function listWorkers(): Promise<{ workers: OrcaWorker[]; titleOf: (worker: OrcaWorker) => string }> {
-  const [response, terminalTitles, taskTitles] = await Promise.all([
-    runOrcaJson(['orchestration', 'worker-list']),
-    getTerminalTitles().catch(() => new Map<string, string>()),
-    getTaskTitles().catch(() => new Map<string, string>())
-  ])
+  const [response, terminals] = await Promise.all([runOrcaJson(['orchestration', 'worker-list']), listCliTerminals(cliRun).catch(() => [])])
+  const terminalTitles = new Map(terminals.map((terminal) => [terminal.handle, terminal.title]))
   const workers = (response.result?.workers ?? []) as OrcaWorker[]
   await writeWorkerTerminals(workers).catch(() => undefined)
-  const titleOf = (worker: OrcaWorker): string => taskTitles.get(String(worker.taskId)) || terminalTitles.get(String(worker.terminal)) || String(worker.taskId ?? 'worker')
+  // agents.list names the dispatched task; the CLI's task-list answers for workers it does not cover.
+  const handles = new Set(workers.map((worker) => String(worker.terminal)))
+  const hostTitles = await hostTaskTitles(host, terminals.filter((terminal) => handles.has(terminal.handle))).catch(() => new Map<string, string>())
+  const taskTitles = workers.every((worker) => hostTitles.has(String(worker.terminal))) ? new Map<string, string>() : await getTaskTitles().catch(() => new Map<string, string>())
+  const titleOf = (worker: OrcaWorker): string => hostTitles.get(String(worker.terminal)) || taskTitles.get(String(worker.taskId)) || terminalTitles.get(String(worker.terminal)) || String(worker.taskId ?? 'worker')
   return { workers, titleOf }
 }
 
@@ -461,8 +458,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       await queueInbox(dir, text)
       return { sent: false, queued: true }
     }
-    await runOrca(['terminal', 'send', '--terminal', handle, '--text', text])
-    await runOrca(['terminal', 'send', '--terminal', handle, '--text', '', '--enter'])
+    await sendToTerminal(host, cliRun, handle, text)
     return { sent: true, queued: false }
   })
 
@@ -472,7 +468,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('board.cleanup', async (input) => runCleanup(await stateDir(), input?.dryRun === true))
 
   orca.panels.handle('board.switch', async ({ terminal }) => {
-    await runOrca(['terminal', 'switch', '--terminal', terminal || (await getCoordinatorHandle())])
+    await focusTerminal(host, cliRun, terminal || (await getCoordinatorHandle()))
     return { switched: true }
   })
 }
