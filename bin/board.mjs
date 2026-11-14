@@ -11,6 +11,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { loadConfig } from './lib/config.mjs'
+import { BOARD_VERSION, migrateBoardFile } from './lib/migrate.mjs'
 import { validateAgainst } from './lib/validate.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
@@ -33,7 +34,7 @@ const BOARD_MD = path.join(path.dirname(BOARD_FILE), 'BOARD.md')
 const INBOX_FILE = path.join(path.dirname(BOARD_FILE), 'inbox.jsonl')
 const INBOX_REJECTED = path.join(path.dirname(BOARD_FILE), 'inbox.rejected.jsonl')
 
-const VERSION = 2
+const VERSION = BOARD_VERSION
 const LOG_KEPT = 20
 const enumOf = (p) => p.enum
 const TASK_STATES = enumOf(SCHEMA.properties.tasks.items.properties.status)
@@ -69,6 +70,7 @@ function emptyBoard() {
 // Only a missing file starts an empty board: an unreadable or corrupt one is refused, or the
 // next write would replace everything on it.
 function load() {
+  migrateBoardFile(BOARD_FILE)
   let text
   try {
     text = fs.readFileSync(BOARD_FILE, 'utf8')
@@ -85,6 +87,8 @@ function load() {
   if (!board || typeof board !== 'object' || Array.isArray(board)) throw new Error(`cannot read ${BOARD_FILE}: not a board object`)
   const merged = { ...emptyBoard(), ...board, seq: { ...emptyBoard().seq, ...(board.seq || {}) } }
   merged.version = VERSION
+  // A field of the wrong type (null, an object) reads as the default; unknown keys stay.
+  for (const key of ['instructions', 'decisions', 'workstreams', 'tasks', 'repos', 'agents', 'log']) if (!Array.isArray(merged[key])) merged[key] = []
   if (!merged.seq.decision) merged.seq.decision = merged.decisions.reduce((max, d) => Math.max(max, Number(d.id) || 0), 0)
   return merged
 }

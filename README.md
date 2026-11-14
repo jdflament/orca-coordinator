@@ -373,6 +373,10 @@ Both accept `--dry-run`. Installed from Orca, run them as
 - A new tool kind is one script in `adapters/<kind>/` with the common command names,
   plus its name in `bin/lib/config.mjs`.
 - A new playbook ships with a precheck and a row in `config.example.yaml`.
+- Every change to a stored shape (`config.yaml`, `board.json`, state files) needs a schema
+  version bump, a migration step in `bin/lib/migrate.mjs` and a fixture test; see
+  [CONTRIBUTING.md](CONTRIBUTING.md). Updates migrate data (backup once, idempotent) and never
+  re-run setup.
 - Keep the panel HTML as the single UI; change the worker contract in
   `plugin/src/protocol.ts` first.
 
@@ -385,6 +389,9 @@ release: Orca installs the newest `vX.Y.Z` tag and `orca plugin update` moves to
 # bump "version" in package.json and orca-plugin.json (a test checks they match)
 git commit -am "v1.0.1" && git tag -a v1.0.1 -m v1.0.1 && git push --follow-tags
 ```
+
+Release checklist: `npm run fixtures:upgrade vX.Y.Z` (after tagging) adds that release's state snapshot
+to `test/fixtures/upgrade/`, and the upgrade tests from the last two released versions must pass.
 
 The tag starts [`.github/workflows/release.yml`](.github/workflows/release.yml): it checks
 the tag matches both files, runs the tests and writes the GitHub release notes. Once, for the

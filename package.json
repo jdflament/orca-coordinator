@@ -20,7 +20,8 @@
     "types": "orca plugin types . && rm -rf types/orca-plugin && cp -R .orca/types types/orca-plugin",
     "typecheck": "([ -f .orca/types/tsconfig.json ] || (mkdir -p .orca && cp -R types/orca-plugin .orca/types)) && tsc -p plugin/tsconfig.json",
     "test:plugin": "orca plugin test .",
-    "check": "node --test \"test/**/*.test.mjs\" && npm run typecheck && orca plugin validate . && orca plugin test ."
+    "check": "node --test \"test/**/*.test.mjs\" && npm run typecheck && orca plugin validate . && orca plugin test .",
+    "fixtures:upgrade": "node scripts/fixtures-upgrade.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",

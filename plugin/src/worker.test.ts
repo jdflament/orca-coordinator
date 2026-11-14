@@ -2,7 +2,7 @@
 // ORCA_CLI_BIN_DIR and a temp coordinator state folder.
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as main from './worker'
@@ -384,7 +384,7 @@ function writeConfig(home: string, extra = '', repos?: { name: string; path: str
   mkdirSync(join(home, '.config/orca-coordinator'), { recursive: true })
   writeFileSync(
     file,
-    `# my coordinator config\n# hand-edited\nperson:\n  name: Alex\n  github: alex-dev\npaths:\n  package: ${pkg}\n  state: ${join(home, 'state')}\n  workspace: ${join(home, 'work')}\nrepos:\n${repos.map((r) => `  - name: ${r.name}\n    path: ${r.path}\n    base: develop\n`).join('')}myTeamNotes:\n  keep: true\n${extra}`
+    `# my coordinator config\n# hand-edited\nschemaVersion: 2\nperson:\n  name: Alex\n  github: alex-dev\npaths:\n  package: ${pkg}\n  state: ${join(home, 'state')}\n  workspace: ${join(home, 'work')}\nrepos:\n${repos.map((r) => `  - name: ${r.name}\n    path: ${r.path}\n    base: develop\n`).join('')}myTeamNotes:\n  keep: true\n${extra}`
   )
   return file
 }
@@ -1232,4 +1232,90 @@ test('settings panel: generic helper lines (no drafts, PRs, tickets or chat), pr
   assert.match(settings, /best'.*coordinator: 'max', worker: 'max', reader: 'standard'/)
   assert.match(settings, /profile\.value = profileOf\(\)/, 'changing a role re-derives the profile, Custom when none matches')
   assert.ok(!/gpt|sonnet|opus|haiku|claude/i.test(settings), 'no model name in the settings code')
+})
+
+// ---- upgrade safety (rules/90-upgrades.md): the state each released version left on disk ----
+
+const UPGRADE_FIXTURES = new URL('../../test/fixtures/upgrade/', import.meta.url).pathname
+
+/** The fixture of a released version, copied into the temp home as that release wrote it. Returns the state folder. */
+function installFixture(home: string, tag: string): string {
+  const fill = (text: string) => text.split('__ROOT__/pkg').join(REAL_PACKAGE).split('__ROOT__').join(home).split('__HOME__').join(home)
+  const copy = (from: string, to: string) => {
+    mkdirSync(join(to, '..'), { recursive: true })
+    writeFileSync(to, fill(readFileSync(from, 'utf8')))
+  }
+  const dir = join(UPGRADE_FIXTURES, tag)
+  copy(join(dir, 'config/config.yaml'), join(home, '.config/orca-coordinator/config.yaml'))
+  const state = join(home, '.local/state/orca-coordinator')
+  for (const file of ['board.json', 'panel.json', 'state.md', 'coordinator-terminal', 'inbox.jsonl']) copy(join(dir, 'state', file), join(state, file))
+  return state
+}
+
+for (const tag of ['v1.0.0', 'v1.0.1']) {
+  test(`upgrade from ${tag}: board.get, setup.status, config.read and config.save work on the old state and keep its data`, async () => {
+    await withHome(async (home) => {
+      await withFakeOrca(true, async () => {
+        const state = installFixture(home, tag)
+        const config = join(home, '.config/orca-coordinator/config.yaml')
+        const worker = await mount(home)
+        const board = JSON.parse(readFileSync(join(state, 'board.json'), 'utf8'))
+        const view = await worker.request('board.get')
+        assert.equal(view.focus, board.focus)
+        assert.deepEqual(view.tasks?.map((t) => t.id), board.tasks.map((t: { id: string }) => t.id))
+        assert.deepEqual(view.decisions?.map((d) => d.id), board.decisions.map((d: { id: number }) => d.id))
+        assert.equal((await worker.request('setup.status')).configured, true)
+        const read = await worker.request('config.read')
+        assert.deepEqual(read.problems, [])
+        assert.equal(read.config?.person.name, 'Alex')
+        // Save after the migration: unknown keys and the migrated version stay; one backup of the original.
+        assert.ok((await worker.request('config.save', { patch: { person: { name: 'Sam' } } })).saved)
+        const saved = readFileSync(config, 'utf8')
+        assert.match(saved, /^schemaVersion: 2$/m)
+        assert.match(saved, /optional: \[planning-tracker, five-line-plan, drafts\]/)
+        assert.match(saved, /name: Sam/)
+        assert.deepEqual(readdirSync(join(config, '..')).filter((f) => f.includes('.bak')), ['config.yaml.bak-v0'])
+        assert.match(readFileSync(`${config}.bak-v0`, 'utf8'), /name: Alex/)
+        assert.equal(readFileSync(join(state, 'coordinator-terminal'), 'utf8'), 'term_fixture\n')
+        assert.deepEqual(worker.refusals, [])
+        await worker.deactivate()
+      })
+    })
+  })
+
+  test(`upgrade from ${tag}: the plugin update runs the migrations, twice is the same, and never runs setup or rewrites the config otherwise`, async () => {
+    await withHome(async (home) => {
+      const state = installFixture(home, tag)
+      const config = join(home, '.config/orca-coordinator/config.yaml')
+      const original = readFileSync(config, 'utf8')
+      await updateIfInstalledHere()
+      const migrated = readFileSync(config, 'utf8')
+      assert.equal(migrated, original.replace(/^(#.*\n)+/, (header) => `${header}schemaVersion: 2\n`) + 'rules:\n  optional: [planning-tracker, five-line-plan, drafts]\n', 'only the version line and the explicit rules were added')
+      assert.equal(readFileSync(`${config}.bak-v0`, 'utf8'), original)
+      await updateIfInstalledHere()
+      assert.equal(readFileSync(config, 'utf8'), migrated, 'idempotent')
+      assert.equal(readFileSync(`${config}.bak-v0`, 'utf8'), original, 'backup written once')
+      assert.ok(!existsSync(join(home, '.claude')), 'setup did not run: no agent folder')
+      assert.equal(readFileSync(join(state, 'coordinator-terminal'), 'utf8'), 'term_fixture\n')
+    })
+  })
+}
+
+test('board.get: a board.json with the wrong types, or that is not an object, still answers; unknown fields pass through', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    writeFileSync(join(dir, 'board.json'), JSON.stringify({ version: 2, focus: 7, decisions: 'nope', tasks: [null, { id: 'A-1' }, 3], futureField: { a: 1 } }))
+    const view = (await worker.request('board.get')) as unknown as Record<string, unknown> & { tasks?: { id: string }[] }
+    assert.deepEqual(view.tasks, [{ id: 'A-1' }])
+    assert.equal(view.decisions, undefined)
+    assert.equal(view.focus, undefined)
+    assert.deepEqual(view.futureField, { a: 1 })
+    for (const junk of ['[]', 'null', '"text"', '{broken']) {
+      writeFileSync(join(dir, 'board.json'), junk)
+      assert.equal((await worker.request('board.get')).coordinatorLive, true, junk)
+    }
+    assert.deepEqual(worker.refusals, [])
+    await worker.deactivate()
+  })
 })

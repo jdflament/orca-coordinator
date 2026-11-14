@@ -216,6 +216,20 @@
     </main>
     <script>
       const PALETTE = ['#8957e5', '#bf8700', '#0e8a8a', '#2f6fbf', '#1f883d', '#c2410c', '#b03a8f', '#5a6b2f']
+      // request-helper:start
+      // Every panel -> worker request goes through request(): the host rejects input that is not
+      // plain JSON ("Invalid input"), so undefined values (and functions) are dropped, deeply.
+      function dropUndefined(value) {
+        if (Array.isArray(value)) return value.map((item) => (item === undefined || typeof item === 'function' ? null : dropUndefined(item)))
+        if (value !== null && typeof value === 'object') {
+          return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined && typeof v !== 'function').map(([k, v]) => [k, dropUndefined(v)]))
+        }
+        return value
+      }
+      function request(name, input) {
+        return input === undefined ? orca.plugin.request(name) : orca.plugin.request(name, dropUndefined(input))
+      }
+      // request-helper:end
       let repoColors = {}
       let oncallLabel = 'Priority'
       const repoColor = (repo) => repoColors[repo] || PALETTE[[...text(repo)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 9973, 7) % PALETTE.length]
@@ -393,7 +407,7 @@
       }
 
       async function openBoard() {
-        const result = await orca.plugin.request('agents.openBoard').catch((error) => ({ opened: false, error: error.message }))
+        const result = await request('agents.openBoard').catch((error) => ({ opened: false, error: error.message }))
         if (!result?.opened) showResult('Could not open the Workspace Board: ' + text(result?.error), [], true)
       }
 
@@ -412,7 +426,7 @@
       async function sendText(message) {
         byId('updated').textContent = 'sending'
         try {
-          const result = await orca.plugin.request('board.send', { text: message })
+          const result = await request('board.send', { text: message })
           byId('updated').textContent = result && result.queued ? 'queued (coordinator offline)' : 'sent'
           return true
         } catch (error) {
@@ -464,7 +478,7 @@
         title.style.flex = '0 1 auto'
         node.append(...(tag && worker.repo ? [repoLabel(worker.repo)] : []), title, el('span', 'meta-text trunc grow', worker.detail), state(worker.status))
         if (worker.terminal) {
-          node.onclick = () => orca.plugin.request('board.switch', { terminal: worker.terminal })
+          node.onclick = () => request('board.switch', { terminal: worker.terminal })
           node.classList.add('go')
           node.title = 'Open its terminal'
         }
@@ -501,12 +515,12 @@
       let undoTimer = null
       async function removeItem(kind, id) {
         try {
-          const removal = await orca.plugin.request('board.remove', { kind, id })
+          const removal = await request('board.remove', { kind, id })
           const node = byId('result')
           node.className = 'result'
           node.replaceChildren(el('span', 'trunc grow', 'Removed ' + id), button('Undo', async () => {
             node.replaceChildren()
-            await orca.plugin.request('board.restore', { removal }).catch((error) => showResult('Could not restore ' + id + ': ' + error.message, [], true))
+            await request('board.restore', { removal }).catch((error) => showResult('Could not restore ' + id + ': ' + error.message, [], true))
             refresh()
           }, 'inline'))
           clearTimeout(undoTimer)
@@ -525,7 +539,7 @@
           el('span', 'trunc grow', 'Close session ' + worker.title + '? It cannot be restored.'),
           button('Close', async () => {
             node.replaceChildren()
-            await orca.plugin.request('board.closeSession', { dispatchId: worker.dispatchId }).catch((error) => showResult('Could not close ' + worker.title + ': ' + error.message, [], true))
+            await request('board.closeSession', { dispatchId: worker.dispatchId }).catch((error) => showResult('Could not close ' + worker.title + ': ' + error.message, [], true))
             refresh()
           }, 'inline'),
           button('Cancel', () => node.replaceChildren(), 'inline')
@@ -618,7 +632,7 @@
         node.append(el('span', 'meta-text trunc grow', local.branch), el('span', 'meta-text fixed', counts))
         node.classList.add('go')
         node.title = 'Open ' + repo + ' changes in Source Control'
-        node.onclick = () => orca.plugin.request('work.openChanges', { repo }).catch((error) => showResult('Could not open ' + repo + ': ' + error.message, [], true))
+        node.onclick = () => request('work.openChanges', { repo }).catch((error) => showResult('Could not open ' + repo + ': ' + error.message, [], true))
         return node
       }
 
@@ -639,46 +653,70 @@
         ])
       }
 
+      // One section failing to draw (an old or odd board.json) shows its own message; the others still draw.
+      function fill(id, title, build) {
+        try {
+          byId(id).replaceChildren(...build())
+        } catch (error) {
+          byId(id).replaceChildren(...section(title, [el('div', 'result error', 'Could not show this section: ' + error.message)]))
+        }
+      }
+      function guard(task) {
+        try { task() } catch { /* a header detail that cannot draw is skipped */ }
+      }
+
       // The ids Needs you shows, as board.get's `seen` names them.
       function needsIds(board) {
         return [...list(board.decisions).filter((d) => d.status !== 'answered').map((d) => 'd:' + d.id), ...list(board.workers).filter((w) => w.needsInput).map((w) => 'w:' + w.dispatchId)]
       }
 
       function render(board) {
-        const ids = needsIds(board)
-        seenNeeds = new Set([...(seenNeeds ?? []), ...ids])
-        repoColors = board.repoColors && typeof board.repoColors === 'object' ? board.repoColors : {}
-        oncallLabel = text(board.oncallLabel) || 'Priority'
+        guard(() => {
+          const ids = needsIds(board)
+          seenNeeds = new Set([...(seenNeeds ?? []), ...ids])
+          repoColors = board.repoColors && typeof board.repoColors === 'object' ? board.repoColors : {}
+          oncallLabel = text(board.oncallLabel) || 'Priority'
+        })
         // board.get already merged each board agent into its live worker (same id, else name = title).
         const workers = list(board.workers)
         const agents = list(board.agents)
-        const busy = agents.filter((a) => a.state === 'working').length + workers.filter((w) => w.status !== 'idle').length
-        byId('start').hidden = board.canStart !== true
-        byId('open').hidden = board.coordinatorLive !== true
-        renderStaleLinks(board.staleLinks)
-        byId('dot').className = board.coordinatorLive ? 'dot live' : 'dot'
-        byId('dot').title = board.coordinatorLive ? 'coordinator live' : 'coordinator offline'
-        byId('updated').textContent = 'updated ' + getAgo(board.updatedAt)
-        byId('focus').textContent = text(board.focus)
-        byId('focus').title = text(board.focus)
-        byId('instructions').replaceChildren(...section('Instructions', renderInstructions(board.instructions)))
-        const pending = pendingNeeds(board.decisions, workers)
-        const plan = planWork(board)
-        const planned = plan.flatMap((group) => group.streams.flatMap((stream) => stream.items.map(({ item }) => item)))
-        const open = planned.filter((item) => !DONE_STATES.includes(item.status)).length
-        const blocked = planned.filter((item) => item.status === 'blocked').length
-        byId('needs').replaceChildren(...section('Needs you', renderNeeds(pending), pending.length ? String(pending.length) : ''))
+        guard(() => {
+          byId('start').hidden = board.canStart !== true
+          byId('open').hidden = board.coordinatorLive !== true
+          byId('dot').className = board.coordinatorLive ? 'dot live' : 'dot'
+          byId('dot').title = board.coordinatorLive ? 'coordinator live' : 'coordinator offline'
+        })
+        guard(() => renderStaleLinks(board.staleLinks))
+        guard(() => {
+          byId('updated').textContent = 'updated ' + getAgo(board.updatedAt)
+          byId('focus').textContent = text(board.focus)
+          byId('focus').title = text(board.focus)
+        })
         lastBoard = board
-        const streams = plan.flatMap((group) => group.streams)
-        const work = section('Work', renderWork(plan), [open ? open + ' open' : '', blocked ? blocked + ' blocked' : ''].filter(Boolean).join(' · '), 'No work yet.')
-        if (streams.length > 3) {
-          const allOpen = streams.every(({ ws, items }) => featureOpen(folds, ws.id, items))
-          const all = el('span', 'all go', allOpen ? 'Collapse all' : 'Expand all')
-          all.onclick = () => { setFolds(Object.fromEntries(streams.map(({ ws }) => [ws.id, !allOpen]))); render(lastBoard) }
-          work[0].append(all)
-        }
-        byId('work').replaceChildren(...work)
-        byId('agents').replaceChildren(...linkHeading(section('Agents', renderAgents(agents, workers), busy ? busy + ' working' : '', 'No agents.'), 'Open the Workspace Board', openBoard))
+        fill('instructions', 'Instructions', () => section('Instructions', renderInstructions(board.instructions)))
+        fill('needs', 'Needs you', () => {
+          const pending = pendingNeeds(board.decisions, workers)
+          return section('Needs you', renderNeeds(pending), pending.length ? String(pending.length) : '')
+        })
+        fill('work', 'Work', () => {
+          const plan = planWork(board)
+          const planned = plan.flatMap((group) => group.streams.flatMap((stream) => stream.items.map(({ item }) => item)))
+          const open = planned.filter((item) => !DONE_STATES.includes(item.status)).length
+          const blocked = planned.filter((item) => item.status === 'blocked').length
+          const streams = plan.flatMap((group) => group.streams)
+          const work = section('Work', renderWork(plan), [open ? open + ' open' : '', blocked ? blocked + ' blocked' : ''].filter(Boolean).join(' · '), 'No work yet.')
+          if (streams.length > 3) {
+            const allOpen = streams.every(({ ws, items }) => featureOpen(folds, ws.id, items))
+            const all = el('span', 'all go', allOpen ? 'Collapse all' : 'Expand all')
+            all.onclick = () => { setFolds(Object.fromEntries(streams.map(({ ws }) => [ws.id, !allOpen]))); render(lastBoard) }
+            work[0].append(all)
+          }
+          return work
+        })
+        fill('agents', 'Agents', () => {
+          const busy = agents.filter((a) => a.state === 'working').length + workers.filter((w) => w.status !== 'idle').length
+          return linkHeading(section('Agents', renderAgents(agents, workers), busy ? busy + ' working' : '', 'No agents.'), 'Open the Workspace Board', openBoard)
+        })
       }
 
       // After a plugin update: links that point at an older copy are only shown, never changed without the click.
@@ -690,7 +728,7 @@
         const update = button('Update links', async () => {
           update.disabled = true
           try {
-            await orca.plugin.request('setup.updateLinks')
+            await request('setup.updateLinks')
           } catch (error) {
             showResult('Could not update the links: ' + error.message, [], true)
           }
@@ -741,7 +779,7 @@
         plan.replaceChildren(el('div', 'muted', 'Checking what can be cleaned up…'))
         plan.firstChild.prepend(el('span', 'spinner'))
         try {
-          const result = await orca.plugin.request('board.cleanup', { dryRun: true })
+          const result = await request('board.cleanup', { dryRun: true })
           const what = getCleanupPlan(result?.counts)
           const kept = result?.counts?.kept ? el('div', 'kept', 'Keeps ' + plural(result.counts.kept, 'worktree', 'worktrees') + ' with open PRs, local changes or unpushed commits') : null
           if (!result?.counts) {
@@ -766,7 +804,7 @@
         for (const node of plan.querySelectorAll('button')) node.disabled = true
         plan.querySelector('.actions')?.prepend(el('span', 'spinner'))
         try {
-          const result = await orca.plugin.request('board.cleanup', { dryRun: false })
+          const result = await request('board.cleanup', { dryRun: false })
           showResult(getCleanupMessage(result?.summary), result?.actions, false)
         } catch (error) {
           showResult('Cleanup failed: ' + error.message, [], true)
@@ -913,7 +951,7 @@
             confirmed: true
           }
           try {
-            const result = await orca.plugin.request('setup.run', options)
+            const result = await request('setup.run', options)
             const lines = text(result?.output).split('\n').filter(Boolean)
             if (!result?.ok) throw Object.assign(new Error('Setup failed'), { lines })
             showResult('Set up in ' + workspace.name + '. Start the coordinator when you are ready.', lines, false)
@@ -947,7 +985,7 @@
         view.hidden = false
         view.replaceChildren(el('div', 'ok', 'Loading settings…'))
         try {
-          renderSettings(await orca.plugin.request('config.read'))
+          renderSettings(await request('config.read'))
         } catch (error) {
           const errors = errorBox()
           showErrors(errors, ['Could not read the settings: ' + error.message])
@@ -1068,8 +1106,8 @@
           node.disabled = true
           node.innerHTML = '<span class="spinner"></span>Removing…'
           try {
-            const result = await orca.plugin.request('config.removeRepo', { path: text(repo.path) })
-            if (result?.saved) return renderSettings(await orca.plugin.request('config.read'), result.ok ? 'Removed' : 'Removed, but render failed')
+            const result = await request('config.removeRepo', { path: text(repo.path) })
+            if (result?.saved) return renderSettings(await request('config.read'), result.ok ? 'Removed' : 'Removed, but render failed')
             showErrors(errors, list(result?.errors).length ? result.errors : ['Remove failed'])
           } catch (error) {
             showErrors(errors, ['Remove failed: ' + error.message])
@@ -1100,10 +1138,10 @@
           save.innerHTML = '<span class="spinner"></span>Saving…'
           status.textContent = ''
           try {
-            const result = await orca.plugin.request('config.save', { patch })
+            const result = await request('config.save', { patch })
             if (result?.ok) {
               // Show what config.yaml now holds, read back, not what the form sent.
-              return renderSettings(await orca.plugin.request('config.read'), 'Saved and rendered')
+              return renderSettings(await request('config.read'), 'Saved and rendered')
             }
             showErrors(errors, list(result?.errors).length ? result.errors : ['Save failed'])
             if (result?.saved) status.textContent = 'Saved'
@@ -1121,7 +1159,7 @@
         node.disabled = true
         node.innerHTML = '<span class="spinner"></span>Starting…'
         try {
-          const result = await orca.plugin.request('setup.start', agent ? { agent } : {})
+          const result = await request('setup.start', agent ? { agent } : {})
           // Orca reports several agents and none was picked: ask which, from exactly what Orca reported.
           if (!result?.started && list(result?.choices).length) {
             showResult('Which agent?', [text(result.output)], false)
@@ -1136,24 +1174,28 @@
       }
 
       async function refresh() {
-        let step = 'Could not load the board: '
+        let step = 'Could not check the setup'
         try {
           if (settingsOpen) return
           if (configured !== true) {
-            step = 'Could not check the setup: '
+            step = 'Could not check the setup'
             // The setup form is filled in by hand: the periodic refresh must not wipe it.
             if (setupShown && !byId('setup').hidden) return
-            const status = await orca.plugin.request('setup.status')
+            const status = await request('setup.status')
             configured = status?.configured === true
             if (!configured) return renderSetup(status || {})
             showSetup(false)
-            step = 'Could not load the board: '
+            step = 'Could not load the board'
           }
+          step = 'Could not load the board'
           // Host request input is JSON: an `undefined` value (the first load has no `seen`) is refused as "input: Invalid input".
-          const board = await orca.plugin.request('board.get', seenNeeds ? { seen: [...seenNeeds] } : {})
+          const board = await request('board.get', seenNeeds ? { seen: [...seenNeeds] } : {})
+          step = 'Could not show the board'
           render(board && typeof board === 'object' ? board : {})
         } catch (error) {
-          byId('updated').textContent = step + error.message
+          // Say which step failed in the header, and in the Work section only; the other sections and buttons keep working.
+          byId('updated').textContent = step + ': ' + error.message
+          fill('work', 'Work', () => section('Work', [el('div', 'result error', step + ': ' + error.message + '. The rest of the panel keeps working; it retries in 15 seconds.')]))
         }
       }
 
@@ -1170,7 +1212,7 @@
       byId('cleanup').onclick = () => { setMenuOpen(false); void previewCleanup() }
       byId('start').onclick = () => void startCoordinator()
       byId('open').innerHTML = ICONS.terminal
-      byId('open').onclick = () => orca.plugin.request('board.switch', {})
+      byId('open').onclick = () => request('board.switch', {})
       byId('gear').innerHTML = ICONS.gear
       byId('gear').onclick = () => void openSettings()
       void refresh()
