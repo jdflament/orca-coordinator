@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "id": "coordinator-board",
   "name": "Coordinator board",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Your coordinator agent in Orca: one click sets it up, then the board shows what needs you, work by ticket and running workers.",
   "engines": {
     "orca": ">=1.4.248"

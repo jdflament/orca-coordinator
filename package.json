@@ -1,6 +1,6 @@
 {
   "name": "orca-coordinator",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Your coordinator agent in Orca: an Orca plugin that sets up the coordinator, its rules, board, playbooks and automations, and shows the board.",
   "license": "MIT",
   "repository": {
