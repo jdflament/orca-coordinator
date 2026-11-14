@@ -24,6 +24,10 @@ interface BoardDecision {
   status: 'pending' | 'answered' | string
   answer?: string
   oncall?: boolean
+  /** `board reconcile` answers the decision when this holds for the PR in url. */
+  settlesWhen?: 'pr-merged' | 'pr-closed' | 'pr-reviewed'
+  /** Added by board.get from `seen`: not in the ids the panel already showed. */
+  isNew?: boolean
   /** Added by board.get from url. */
   linkHost?: LinkHost
 }
@@ -102,6 +106,8 @@ export interface LiveWorker {
   status: 'working' | 'idle' | 'needs input'
   terminal: string | null
   needsInput: boolean
+  /** Added by board.get from `seen`: not in the ids the panel already showed. */
+  isNew?: boolean
   /** From the board agent that is the same work (see board.get), when there is one. */
   repo?: string
   detail?: string
@@ -268,7 +274,8 @@ export interface ConfigSave {
 
 declare module 'orca' {
   interface PluginRequests {
-    'board.get': { output: BoardView }
+    /** seen: the Needs you ids this panel session already showed ("d:<decision id>", "w:<dispatch id>"); items outside it come back with isNew. Omitted on the first load. */
+    'board.get': { input: { seen?: string[] }; output: BoardView }
     /** Types text + Enter into the coordinator terminal, or queues it in inbox.jsonl when offline. */
     'board.send': { input: { text: string }; output: { sent: boolean; queued: boolean } }
     /** Runs <coordinatorDir>/bin/cleanup (dryRun: with -n, changing nothing) and returns its summary line and actions. */
