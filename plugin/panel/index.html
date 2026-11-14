@@ -144,6 +144,7 @@
       .field { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; align-items: center; min-width: 0; }
       .field > span { color: var(--muted); font-size: 11px; }
       .field > .help { grid-column: 2; color: var(--muted); font-size: 11px; }
+      .model-pick { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
       .field.top { align-items: start; }
       .field.top > span { padding-top: 4px; }
       .checks { display: flex; flex-direction: column; min-width: 0; }
@@ -833,9 +834,18 @@
             control.placeholder = "the agent's default"
             return { control, node: field(label, control, false, help) }
           }
-          const models = !saved || choice.models.includes(saved) ? choice.models : [saved, ...choice.models]
-          const control = select(models, saved || choice.tiers?.[tier] || models[0])
-          return { control, node: field(label, control, false, help) }
+          // The agent's models, plus "Other…" for any id; a saved id the list lacks opens as Other.
+          const OTHER = '__other__'
+          const menu = select([...choice.models, { value: OTHER, label: 'Other…' }], !saved ? choice.tiers?.[tier] || choice.models[0] : choice.models.includes(saved) ? saved : OTHER)
+          const custom = input(choice.models.includes(saved) ? '' : saved)
+          custom.placeholder = 'model id'
+          const sync = () => { custom.hidden = menu.value !== OTHER }
+          menu.addEventListener('change', sync)
+          sync()
+          const control = { get value() { return menu.value === OTHER ? custom.value : menu.value } }
+          const row = el('div', 'model-pick')
+          row.append(menu, custom)
+          return { control, node: field(label, row, false, help) }
         }
         const models = read.models || {}
         const coordinatorModel = modelField('Coordinator', models.coordinator, agents.coordinator?.model, 'best', 'Plans and judges; best tier.')

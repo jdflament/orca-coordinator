@@ -329,15 +329,19 @@ function coordinatorCli(config: CoordinatorSettings | null): string {
 
 const NO_MODELS: ModelChoice = { models: null, tiers: null }
 
+/** Stable aliases the agent's CLI accepts for --model, for an agent with no `models` command (`claude --help`: 'opus', 'sonnet'; haiku likewise). */
+const MODEL_PRESETS: Record<string, string[]> = { claude: ['opus', 'sonnet', 'haiku'] }
+
 /**
- * The models an agent offers: the lines of `<agent> models` (a CLI argv, no shell). Null when the
- * agent has no such command, fails or prints nothing usable: the panel then asks for free text.
+ * The models an agent offers: the lines of `<agent> models` (a CLI argv, no shell), else its preset.
+ * Null when it has neither: the panel then asks for free text.
  * Tiers are picked by name (best / medium / lowest), else by position in the list.
  */
 export async function listModels(agent: string | undefined): Promise<ModelChoice> {
   if (!agent || !/^[\w.-]+$/.test(agent)) return NO_MODELS
   const result = await run(agent, ['models'], { timeout: 8000 })
-  const models = result.ok ? [...new Set(lines(result.stdout).filter((line) => /^[A-Za-z0-9][\w./:@+-]*$/.test(line)))] : []
+  const listed = result.ok ? [...new Set(lines(result.stdout).filter((line) => /^[A-Za-z0-9][\w./:@+-]*$/.test(line)))] : []
+  const models = listed.length ? listed : (MODEL_PRESETS[agent] ?? [])
   if (models.length === 0) return NO_MODELS
   const find = (pattern: RegExp, fallback: number) => models.find((m) => pattern.test(m)) ?? models[fallback]
   return {

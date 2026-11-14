@@ -1098,7 +1098,7 @@ async function withFakeAgent<T>(name: string, output: string | null, run: () => 
   }
 }
 
-test('config.read: models come from the agent\'s own list with best / medium / lowest defaults; an unreadable list gives free text', async () => {
+test('config.read: models come from the agent\'s own list with best / medium / lowest defaults; no models command uses the agent preset, else free text', async () => {
   await withHome(async (home) => {
     await withFakeOrca(false, async () => {
       writeConfig(home)
@@ -1112,10 +1112,16 @@ test('config.read: models come from the agent\'s own list with best / medium / l
       await withFakeAgent('claude', 'm-a m-b m-c m-d', async () => {
         assert.deepEqual((await worker.request('config.read')).models.worker.tiers, { best: 'm-a', medium: 'm-c', lowest: 'm-d' })
       })
+      // No models command: claude's preset of aliases, best / medium / lowest.
       await withFakeAgent('claude', null, async () => {
         const read = await worker.request('config.read')
-        assert.deepEqual(read.models.coordinator, { models: null, tiers: null })
+        assert.deepEqual(read.models.coordinator, { models: ['opus', 'sonnet', 'haiku'], tiers: { best: 'opus', medium: 'sonnet', lowest: 'haiku' } })
         assert.deepEqual(read.problems, [], 'an agent that cannot list models is not a config problem')
+      })
+      // No models command and no preset: free text.
+      writeConfig(home, 'agents:\n  coordinator: {agent: mystery}\n  worker: {agent: mystery}\n')
+      await withFakeAgent('mystery', null, async () => {
+        assert.deepEqual((await worker.request('config.read')).models.coordinator, { models: null, tiers: null })
       })
       await worker.deactivate()
     })
@@ -1205,4 +1211,17 @@ test('board.closeSession: when Orca fails to release, the request rejects and th
     assert.equal(releases(log).length, 1, 'tried once, no retry')
     await worker.deactivate()
   }, undefined, SESSIONS)
+})
+
+test('config.save: a custom model id outside the offered list (Other…) is kept and read back', async () => {
+  await withHome(async (home) => {
+    await withFakeOrca(false, async () => {
+      writeConfig(home)
+      const worker = await mount(home)
+      const saved = await worker.request('config.save', { patch: { agents: { coordinator: { model: 'my-custom-1' } } } })
+      assert.deepEqual(saved.errors, [])
+      assert.equal((await worker.request('config.read')).config?.agents.coordinator.model, 'my-custom-1')
+      await worker.deactivate()
+    })
+  })
 })
