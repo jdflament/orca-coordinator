@@ -846,6 +846,61 @@ test('board.get writes worker-terminals for the status line: each worker termina
     { dispatchId: 'd', state: 'running', terminal: 'bad handle; rm', taskId: 't4' },
     { dispatchId: 'e', state: 'succeeded', terminal: null, taskId: 't5' }
   ])
+
+// board.remove / board.restore: the real bin/board.mjs edits board.json; no other file changes.
+const BOARD_CLI = new URL('../../bin/board.mjs', import.meta.url).pathname
+
+function removableState(): string {
+  const dir = stateFolder()
+  writeFileSync(join(dir, 'bin', 'board'), `#!/bin/sh\nCOORDINATOR_BOARD='${join(dir, 'board.json')}' exec '${process.execPath}' '${BOARD_CLI}' "$@"\n`)
+  chmodSync(join(dir, 'bin', 'board'), 0o755)
+  return dir
+}
+
+const readBoard = (dir: string) => JSON.parse(readFileSync(join(dir, 'board.json'), 'utf8'))
+
+test('board.remove: a task, a workstream and an idle agent leave board.json; Undo puts each back with its fields', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = removableState()
+    execFileSync(join(dir, 'bin', 'board'), ['agent:set', 'old-review', 'idle', '--repo', 'api', '--detail', 'done earlier'])
+    const before = readBoard(dir)
+    const task = before.tasks[0]
+    const ws = before.workstreams[0]
+    const agent = before.agents.find((a: { name: string; state: string }) => a.name !== 'coordinator' && a.state !== 'working')
+    assert.ok(task && ws && agent, 'fixture has one of each')
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    const removals = [
+      await worker.request('board.remove', { kind: 'task', id: task.id }),
+      await worker.request('board.remove', { kind: 'workstream', id: ws.id }),
+      await worker.request('board.remove', { kind: 'agent', id: agent.name })
+    ]
+    const after = readBoard(dir)
+    assert.ok(!after.tasks.some((t: { id: string }) => t.id === task.id))
+    assert.ok(!after.workstreams.some((w: { id: string }) => w.id === ws.id))
+    assert.ok(!after.agents.some((a: { name: string }) => a.name === agent.name))
+    for (const removal of removals) assert.deepEqual(await worker.request('board.restore', { removal }), { restored: true })
+    const restored = readBoard(dir)
+    const pick = (item: Record<string, unknown>, keys: string[]) => Object.fromEntries(keys.filter((k) => item[k] !== undefined && item[k] !== '').map((k) => [k, item[k]]))
+    assert.deepEqual(pick(restored.tasks.find((t: { id: string }) => t.id === task.id), ['id', 'status', 'repo', 'detail', 'url']), pick(task, ['id', 'status', 'repo', 'detail', 'url']))
+    assert.equal(restored.workstreams.find((w: { id: string }) => w.id === ws.id).title, ws.title)
+    assert.equal(restored.agents.find((a: { name: string }) => a.name === agent.name).state, agent.state)
+    await worker.deactivate()
+  })
+})
+
+test('board.remove refuses the coordinator, a working agent and unknown items, and leaves board.json untouched', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = removableState()
+    const working = readBoard(dir).agents.find((a: { state: string }) => a.state === 'working')
+    const bytes = readFileSync(join(dir, 'board.json'), 'utf8')
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    await assert.rejects(worker.request('board.remove', { kind: 'agent', id: 'coordinator' }), /coordinator/)
+    if (working) await assert.rejects(worker.request('board.remove', { kind: 'agent', id: working.name }), /working/)
+    await assert.rejects(worker.request('board.remove', { kind: 'task', id: 'NOPE-1' }), /no task/)
+    await assert.rejects(worker.request('board.remove', { kind: 'worker', id: 'ctx_1' } as never), /required/)
+    assert.equal(readFileSync(join(dir, 'board.json'), 'utf8'), bytes)
+    await worker.deactivate()
+  })
 })
 
 /** A home where Claude Code and OpenCode are installed (their config folders exist) and the user has a settings.json. */

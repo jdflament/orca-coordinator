@@ -92,7 +92,7 @@
       .trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .meta-text { color: color-mix(in srgb, var(--muted) 70%, transparent); font-size: 11px; }
       .act { visibility: hidden; }
-      .row:hover .act, .wk:hover .act, .act.keep { visibility: visible; }
+      .row:hover .act, .wk:hover .act, .feature:hover .act, .act.keep { visibility: visible; }
       .repo { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; flex: none; max-width: 35%; overflow: hidden; }
       .fixed { flex: none; overflow: visible; }
       .repo i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
@@ -111,7 +111,7 @@
       .feature a { font-weight: 500; }
       .bar { margin-left: auto; width: 48px; height: 3px; border-radius: 999px; overflow: hidden; background: var(--muted-bg); flex: none; }
       .bar i { display: block; height: 100%; border-radius: inherit; background: var(--green); }
-      .note { color: var(--amber); font-size: 11px; }
+      .note { color: color-mix(in srgb, var(--muted) 70%, transparent); font-size: 10px; }
       .muted { color: var(--muted); }
       /* Empty state: py-1 text-xs muted. */
       .ok { color: var(--muted); padding: 4px 12px; }
@@ -196,6 +196,7 @@
         // Lucide, as Orca renders them (copied from Orca.app's renderer bundle): ellipsis, terminal, square, refresh-cw, settings.
         more: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>',
         terminal: '<svg viewBox="0 0 24 24"><path d="M12 19h8"/><path d="m4 17 6-6-6-6"/></svg>',
+        x: '<svg viewBox="0 0 24 24"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',
         stop: '<svg viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2"/></svg>',
         // Link hosts (Lucide ticket, git-pull-request, message-square, file-text): only for hosts the worker recognised.
         ticket: '<svg viewBox="0 0 24 24"><path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z"/><path d="M13 5v2"/><path d="M13 17v2"/><path d="M13 11v2"/></svg>',
@@ -392,6 +393,32 @@
         return [...list(board.tasks), ...prs]
       }
 
+      // Removing from the board: the row goes at once, Undo (a few seconds) puts it back through board.restore.
+      let undoTimer = null
+      async function removeItem(kind, id) {
+        try {
+          const removal = await orca.plugin.request('board.remove', { kind, id })
+          const node = byId('result')
+          node.className = 'result'
+          node.replaceChildren(el('span', 'trunc grow', 'Removed ' + id), button('Undo', async () => {
+            node.replaceChildren()
+            await orca.plugin.request('board.restore', { removal }).catch((error) => showResult('Could not restore ' + id + ': ' + error.message, [], true))
+            refresh()
+          }))
+          clearTimeout(undoTimer)
+          undoTimer = setTimeout(() => node.replaceChildren(), 6000)
+        } catch (error) {
+          showResult('Could not remove ' + id + ': ' + error.message, [], true)
+        }
+        refresh()
+      }
+      const removeButton = (kind, id) => iconButton('x', 'Remove ' + id + ' from the board', () => removeItem(kind, id))
+      function noteSpan(notes) {
+        const node = el('span', 'note trunc grow', notes)
+        node.title = text(notes)
+        return node
+      }
+
       function renderWorkRow(item) {
         const nudge = item.status === 'blocked' ? iconButton('retry', 'Nudge ' + item.id, () => sendText('nudge ' + item.id)) : null
         // The item's own url (the coordinator writes it from the tool it used): the PR's when there is one, else the ticket's.
@@ -399,7 +426,7 @@
         const id = item.pr ? link(item.id, '', 'trunc') : link(item.id, item.url, 'trunc', item.linkHost)
         id.style.flex = '0 1 auto'
         const node = el('div', 'wk')
-        node.append(repoLabel(item.repo), id, ...pr, ...oncallBadge(item), el('span', 'meta-text trunc grow', item.detail), item.status === 'pr' ? el('span') : state(item.status), ...(nudge ? [nudge] : []))
+        node.append(repoLabel(item.repo), id, ...pr, ...oncallBadge(item), el('span', 'meta-text trunc grow', item.detail), item.status === 'pr' ? el('span') : state(item.status), ...(nudge ? [nudge] : []), ...(item.name === undefined ? [removeButton('task', item.id)] : []))
         return node
       }
 
@@ -422,7 +449,7 @@
         bar.firstChild.style.width = progress + '%'
         const title = link(ws.title, ws.url, 'trunc', ws.linkHost)
         title.style.flex = '0 1 auto'
-        node.append(title, ...oncallBadge(ws), el('span', 'note trunc grow', ws.notes), bar)
+        node.append(title, ...oncallBadge(ws), noteSpan(ws.notes), bar, removeButton('workstream', ws.id))
         return node
       }
 
@@ -454,7 +481,7 @@
           name.style.flex = '0 1 auto'
           return row([
             repoLabel(agent.repo), name, el('span', 'meta-text trunc grow', [agent.role === 'worker' ? '' : agent.role, agent.detail].filter(Boolean).join(' · ')), state(agent.state),
-            ...(agent.state === 'working' ? [iconButton('stop', 'Stop ' + agent.name, () => sendText('stop ' + agent.name))] : [])
+            ...(agent.state === 'working' ? [iconButton('stop', 'Stop ' + agent.name, () => sendText('stop ' + agent.name))] : agent.name === 'coordinator' ? [] : [removeButton('agent', agent.name)])
           ])
         })
         return [...fromBoard, ...workers.map(renderWorkerRow)]

@@ -7,7 +7,7 @@ import { appendFileSync, mkdirSync } from 'node:fs'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
-import type { Board, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
+import type { Board, BoardRemoval, BoardRemoveKind, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
 import { listReportedAgents } from './host'
 import { configFile, expandHome, getSetupStatus, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, staleSkillLinks, updateIfInstalledHere, updateLinks } from './setup'
 import { linkHost } from './links'
@@ -250,6 +250,51 @@ function runCleanup(dir: string, dryRun: boolean): Promise<CleanupResult> {
   })
 }
 
+// ---- manual clean-up: remove one board item (through bin/board), restore it on Undo ----
+
+const REMOVE_VERBS: Record<BoardRemoveKind, { rm: string; add: string; key: 'id' | 'name' }> = {
+  task: { rm: 'task:rm', add: 'task:add', key: 'id' },
+  workstream: { rm: 'ws:rm', add: 'ws:add', key: 'id' },
+  agent: { rm: 'agent:rm', add: 'agent:set', key: 'name' }
+}
+
+function runBoard(dir: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(path.join(dir, 'bin', 'board'), args, { timeout: 10000 }, (error, _out, stderr) => (error ? reject(new Error(String(stderr).trim() || error.message)) : resolve()))
+  })
+}
+
+function invalid(message: string): Error {
+  return Object.assign(new Error(message), { code: 'invalid_params' })
+}
+
+async function removeBoardItem(kind: BoardRemoveKind, id: string): Promise<BoardRemoval> {
+  const verbs = REMOVE_VERBS[kind]
+  if (!verbs || !id) throw invalid('kind and id are required')
+  const dir = await stateDir()
+  const board = await readJson<Board>(path.join(dir, 'board.json'), { version: 2 })
+  const list = (kind === 'task' ? board.tasks : kind === 'workstream' ? board.workstreams : board.agents) ?? []
+  const item = (list as unknown as Record<string, unknown>[]).find((entry) => String(entry[verbs.key]) === id)
+  if (!item) throw invalid(`no ${kind} ${id} on the board`)
+  if (kind === 'agent' && (id === 'coordinator' || item.role === 'coordinator')) throw invalid('the coordinator is never removed')
+  if (kind === 'agent' && item.state === 'working') throw invalid(`${id} is working: stop it first`)
+  await runBoard(dir, [verbs.rm, id])
+  return { kind, item }
+}
+
+/** Puts a removed item back through the same board verbs, with the fields it had. */
+async function restoreBoardItem(removal: BoardRemoval): Promise<{ restored: boolean }> {
+  const verbs = REMOVE_VERBS[removal?.kind]
+  const item = removal?.item
+  if (!verbs || !item || typeof item[verbs.key] !== 'string') throw invalid('nothing to restore')
+  const fields = removal.kind === 'agent' ? ['id', 'repo', 'role', 'detail'] : removal.kind === 'task' ? ['ws', 'repo', 'status', 'pr', 'url', 'detail'] : ['title', 'url', 'status', 'progress', 'notes']
+  const args = fields.flatMap((field) => (item[field] === undefined || item[field] === null || item[field] === '' ? [] : [`--${field}`, String(item[field])]))
+  if (removal.kind === 'agent') args.unshift(String(item.state ?? 'idle'))
+  if (item.oncall === true) args.push('--oncall')
+  await runBoard(await stateDir(), [verbs.add, String(item[verbs.key]), ...args])
+  return { restored: true }
+}
+
 /** "<option> <decision>" is a decision click only when the board has that pending decision with that option. */
 function isDecisionClick(board: Board, optionId: string, decisionId: string): boolean {
   const decision = (board.decisions ?? []).find((d) => String(d.id) === decisionId && d.status !== 'answered')
@@ -353,6 +398,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { sent: true, queued: false }
   })
 
+  orca.panels.handle('board.remove', ({ kind, id }) => removeBoardItem(kind, String(id ?? '')))
+  orca.panels.handle('board.restore', ({ removal }) => restoreBoardItem(removal))
   orca.panels.handle('board.cleanup', async (input) => runCleanup(await stateDir(), input?.dryRun === true))
 
   orca.panels.handle('board.switch', async ({ terminal }) => {
