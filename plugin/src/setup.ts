@@ -7,7 +7,7 @@ import { cpSync, existsSync, readFileSync, readlinkSync, realpathSync, renameSyn
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ConfigPatch, ConfigRepo, ConfigRead, ConfigSave, CoordinatorSettings, SetupAgent, SetupOptions, SetupRepo, SetupStatus, SetupWorkspace } from './protocol'
+import type { ConfigPatch, ModelRole, ConfigRepo, ConfigRead, ConfigSave, CoordinatorSettings, SetupAgent, SetupOptions, SetupRepo, SetupStatus, SetupWorkspace } from './protocol'
 import { listProjects, listReportedAgents, type Host } from './host'
 
 /** This plugin's root: src/ → plugin/ → the package. */
@@ -337,9 +337,9 @@ export async function readSettings(orca: Orca, host: Host | null = null): Promis
   // Entries that are not git repositories are not problems to fix by hand: the view offers to remove each.
   const skippedRepos = await loadSkippedRepos(node)
   const strict = await loadConfigJson(node, true)
-  if (strict.config) return { ...base, repos, skippedRepos, config: strict.config, problems: [] }
-  const lenient = await loadConfigJson(node, false)
-  return { ...base, repos, skippedRepos, config: lenient.config, problems: strict.problems }
+  const lenient = strict.config ? null : await loadConfigJson(node, false)
+  const config = strict.config ?? lenient?.config ?? null
+  return { ...base, repos, skippedRepos, config, problems: strict.config ? [] : strict.problems }
 }
 
 /** config.yaml's repos entries that are not git repositories (`config --skipped-repos`); [] when unreadable. */
@@ -380,7 +380,17 @@ function mergeRepos(current: ConfigRepo[], form: ConfigRepo[], loaded: string[] 
 }
 
 /** The settings the panel may change; everything else (adapters, automations, queue, budget) stays config.yaml-only. */
-const EDITABLE = ['person', 'repos'] as const
+const EDITABLE = ['person', 'repos', 'models'] as const
+const LEVELS = ['light', 'standard', 'max']
+const ROLES = ['coordinator', 'worker', 'reader']
+
+/** The model id a role runs with: a model set by hand under agents.<role>.model wins, else the id of the role's level; '' = pass no --model. */
+export function modelFor(config: CoordinatorSettings, role: ModelRole): string {
+  const legacy = (config.agents as Record<string, { model?: string | null } | undefined>)[role]?.model
+  if (legacy) return String(legacy)
+  const level = config.models?.roles?.[role]
+  return level ? String(config.models?.levels?.[level] ?? '') : ''
+}
 
 /**
  * Merges the editable settings into config.yaml (validated by the package's CLI), then renders.
@@ -391,6 +401,11 @@ export async function saveSettings(patch: ConfigPatch): Promise<ConfigSave> {
   const node = await findNode()
   if (!node) return { ok: false, saved: false, errors: [NO_NODE] }
   const editable = Object.fromEntries(EDITABLE.filter((key) => key in patch).map((key) => [key, patch[key]])) as ConfigPatch
+  // Models: only the level per role; the level -> id mapping is never written from here.
+  if (editable.models) {
+    const roles = Object.fromEntries(Object.entries(editable.models.roles ?? {}).filter(([role, level]) => ROLES.includes(role) && LEVELS.includes(String(level))))
+    editable.models = { roles }
+  }
   if (Array.isArray(editable.repos)) {
     const current = await loadConfigJson(node, false)
     if (!current.config) return { ok: false, saved: false, errors: ['config.yaml could not be read before the save; nothing was written.', ...current.problems] }

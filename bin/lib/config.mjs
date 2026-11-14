@@ -57,9 +57,16 @@ export function defaults() {
       orca: defaultOrcaBin()
     },
     agents: {
-      coordinator: { agent: '', statusline: false },
+      coordinator: { agent: '', model: null, statusline: false },
       worker: { agent: '', model: null, extraArgs: '', permissionsFile: null },
+      reader: { model: null },
       automation: { provider: '' }
+    },
+    // Intelligence levels: what each role runs on (Light is cheapest, Max is smartest and costs most) and the
+    // model id each level means for the agent in use. Empty id = Orca's default; the coordinator agent fills them.
+    models: {
+      levels: { light: '', standard: '', max: '' },
+      roles: { coordinator: 'max', worker: 'standard', reader: 'light' }
     },
     git: { branchPattern: '{github}/{ticket-lower}', prTitlePattern: '{ticket}: {title}', protectedBranches: ['main', 'master', 'develop'] },
     repos: [],
@@ -170,8 +177,19 @@ export const TICKETING_KINDS = ['linear', 'jira', 'github', 'none']
 export const CHAT_KINDS = ['slack', 'none']
 export const FLAGS_KINDS = ['unleash', 'none']
 
+export const MODEL_LEVELS = ['light', 'standard', 'max']
+export const MODEL_ROLES = ['coordinator', 'worker', 'reader']
+
+/** The model id a role runs with: a model set by hand under agents.<role>.model wins, else the id of the role's level; '' = pass no --model. */
+export function modelFor(config, role) {
+  const legacy = config.agents?.[role]?.model
+  if (legacy) return String(legacy)
+  return String(config.models?.levels?.[config.models?.roles?.[role]] ?? '')
+}
+
 export function validate(config) {
   const problems = []
+  for (const role of MODEL_ROLES) if (!MODEL_LEVELS.includes(config.models?.roles?.[role])) problems.push(`models.roles.${role} must be one of ${MODEL_LEVELS.join('|')}`)
   if (!config.person.name) problems.push('person.name is empty')
   if (!config.paths.workspace) problems.push('paths.workspace is empty (the Orca workspace folder the coordinator runs in)')
   if (!config.paths.state) problems.push('paths.state is empty')
@@ -222,6 +240,8 @@ function derived(config) {
   const adapter = (kind, name) => path.join(pkg, 'adapters', kind, `${name}.sh`)
   return {
     configPath: defaultConfigPath(),
+    // The model id per role ('' = pass no --model), for the rules.
+    modelId: Object.fromEntries(MODEL_ROLES.map((role) => [role, modelFor(config, role)])),
     paths: {
       bin: path.join(state, 'bin'),
       playbooks: path.join(state, 'playbooks'),

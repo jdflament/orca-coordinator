@@ -349,7 +349,7 @@ What still goes through the `orca` CLI, and what would let it switch:
 - No long work in the coordinator session: spawn or `send` to a worker. No polling, no
   sleep loops, one retry per failed worker, at most `budget.maxWorkersPerTrigger` per trigger.
 - Every automation has a precheck; a precheck that cannot be written means no automation.
-- Workers run on the cheapest capable agent and model (`agents.worker.model`); the
+- Workers run on the Workers level (`models.roles.worker`, Standard by default); the
   coordinator runs on the smartest one.
 
 ## Uninstall

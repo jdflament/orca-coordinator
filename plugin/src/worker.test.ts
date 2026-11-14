@@ -1123,6 +1123,59 @@ test('board.get canStart: Start coordinator shows only when set up and not runni
   })
 })
 
+/** The coordinator's launches in the fake Orca's log, as argument lines. */
+const launchLines = (log: string) => readFileSync(log, 'utf8').split('\n').filter((l) => l.startsWith('agent launch'))
+
+test('config.read: roles default to Balanced (Max / Standard / Light), levels have no ids, and no model name comes from the plugin', async () => {
+  await withHome(async (home) => {
+    await withFakeOrca(false, async () => {
+      writeConfig(home)
+      const worker = await mount(home)
+      const read = await worker.request('config.read')
+      assert.deepEqual(read.config?.models?.roles, { coordinator: 'max', worker: 'standard', reader: 'light' })
+      assert.deepEqual(read.config?.models?.levels, { light: '', standard: '', max: '' })
+      assert.equal('models' in read, false, 'no model list is offered: the plugin knows no model')
+      assert.deepEqual(read.problems, [])
+      await worker.deactivate()
+    })
+  })
+})
+
+test('config.save: only the level per role is written; ids per level and legacy models are not editable here', async () => {
+  await withHome(async (home) => {
+    await withFakeOrca(false, async () => {
+      const file = writeConfig(home, 'models:\n  levels: {light: l-1, standard: "", max: m-1}\n')
+      const worker = await mount(home)
+      const saved = await worker.request('config.save', { patch: { models: { roles: { coordinator: 'standard', worker: 'light', reader: 'bogus' }, levels: { max: 'invented' } } } as never })
+      assert.deepEqual(saved.errors, [])
+      const read = (await worker.request('config.read')).config
+      assert.deepEqual(read?.models?.roles, { coordinator: 'standard', worker: 'light', reader: 'light' }, 'an unknown level is dropped')
+      assert.deepEqual(read?.models?.levels, { light: 'l-1', standard: '', max: 'm-1' }, 'the plugin never writes or invents ids')
+      assert.match(readFileSync(file, 'utf8'), /myTeamNotes:\n\s+keep: true/)
+      await worker.deactivate()
+    })
+  })
+})
+
+test('setup.start: a level without an id passes no --model; an id passes it; a legacy agents.coordinator.model wins', async () => {
+  await withHome(async (home) => {
+    await withFakeOrca(false, async (log) => {
+      writeConfig(home)
+      const worker = await mount(home)
+      await worker.request('setup.start', { agent: 'claude' })
+      assert.ok(!launchLines(log)[0].includes('--model'), 'Max has no id: Orca\'s default')
+      writeConfig(home, 'models:\n  levels: {light: "", standard: std-9, max: max-9}\n')
+      await worker.request('setup.start', { agent: 'claude' })
+      assert.match(launchLines(log)[1], /--model max-9 --worktree/)
+      assert.ok(!launchLines(log)[1].includes('std-9'))
+      writeConfig(home, 'models:\n  levels: {light: "", standard: std-9, max: max-9}\nagents:\n  coordinator: {agent: claude, model: by-hand-1}\n')
+      await worker.request('setup.start', { agent: 'claude' })
+      assert.match(launchLines(log)[2], /--model by-hand-1 --worktree/, 'a model set by hand keeps working and wins')
+      await worker.deactivate()
+    })
+  })
+})
+
 // board.closeSession: an idle or finished-but-open worker is released through Orca; nothing else is.
 const SESSIONS = [
   { dispatchId: 'ctx_run', state: 'running', outcome: 'in_progress', terminal: 'term_w1', taskId: 'task_1' },
@@ -1165,4 +1218,18 @@ test('board.closeSession: when Orca fails to release, the request rejects and th
     assert.equal(releases(log).length, 1, 'tried once, no retry')
     await worker.deactivate()
   }, undefined, SESSIONS)
+})
+
+test('settings panel: generic helper lines (no drafts, PRs, tickets or chat), profiles set the three roles, a changed role reads Custom, no model name in the panel', () => {
+  const html = readFileSync(new URL('../panel/index.html', import.meta.url), 'utf8')
+  for (const line of ['What the coordinator calls you.', 'The language the coordinator uses with you.', 'How the coordinator writes to you, e.g. brief or detailed.', 'Light is cheapest, Max is smartest and costs most.']) {
+    assert.ok(html.includes(line), line)
+  }
+  const settings = html.slice(html.indexOf('// Intelligence levels per role'), html.indexOf('// Repos: the configured ones'))
+  assert.ok(!/draft|\bPR\b|ticket|chat/i.test(html.slice(html.indexOf("field('Name'"), html.indexOf("field('Name'") + 400)), 'helper lines are generic')
+  assert.match(settings, /save'.*coordinator: 'standard', worker: 'light', reader: 'light'/)
+  assert.match(settings, /balanced'.*coordinator: 'max', worker: 'standard', reader: 'light'/)
+  assert.match(settings, /best'.*coordinator: 'max', worker: 'max', reader: 'standard'/)
+  assert.match(settings, /profile\.value = profileOf\(\)/, 'changing a role re-derives the profile, Custom when none matches')
+  assert.ok(!/gpt|sonnet|opus|haiku|claude/i.test(settings), 'no model name in the settings code')
 })

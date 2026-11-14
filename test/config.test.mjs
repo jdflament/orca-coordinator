@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { parseYaml, toYaml } from '../bin/lib/yaml.mjs'
-import { defaults, loadConfig, render, templateValues } from '../bin/lib/config.mjs'
+import { defaults, loadConfig, MODEL_ROLES, modelFor, render, templateValues, validate } from '../bin/lib/config.mjs'
 import { ROOT, sandbox } from './helpers.mjs'
 
 test('yaml: block and flow maps, lists, quotes and comments parse as written and round-trip through toYaml', () => {
@@ -112,4 +112,29 @@ test('release: package.json and orca-plugin.json carry the same version, and the
   assert.equal(plugin.version, pkg.version)
   assert.ok(fs.existsSync(path.join(root, plugin.main)), plugin.main)
   for (const panel of plugin.contributes.panels) assert.ok(fs.existsSync(path.join(root, panel.entry)), panel.entry)
+})
+
+test('models: levels default to Balanced with no ids; a level id becomes the role\'s model, a model set by hand wins, empty means no --model', () => {
+  const config = defaults()
+  assert.deepEqual(config.models.roles, { coordinator: 'max', worker: 'standard', reader: 'light' })
+  assert.deepEqual(config.models.levels, { light: '', standard: '', max: '' })
+  for (const role of MODEL_ROLES) assert.equal(modelFor(config, role), '', 'no id: pass no --model')
+  config.models.levels = { light: 'l-1', standard: 's-1', max: 'm-1' }
+  assert.deepEqual(MODEL_ROLES.map((role) => modelFor(config, role)), ['m-1', 's-1', 'l-1'])
+  config.agents.worker.model = 'by-hand'
+  assert.equal(modelFor(config, 'worker'), 'by-hand', 'legacy agents.*.model wins')
+  config.models.roles.reader = 'bogus'
+  assert.ok(validate(config).some((problem) => problem.includes('models.roles.reader')))
+})
+
+test('rules: workers and readers get their own level\'s model, the coordinator\'s model is not the worker\'s, and an empty id omits --model', () => {
+  const config = defaults()
+  config.models.levels = { light: 'l-1', standard: 's-1', max: 'm-1' }
+  const text = fs.readFileSync(new URL('../rules/20-workers.md', import.meta.url), 'utf8')
+  const out = render(text, templateValues(config))
+  assert.match(out, /workers[^\n]*`s-1` \(level standard\); readers[^\n]*`l-1` \(level light\)/)
+  assert.match(out, /Your own model is `m-1`[^\n]*`--resume` keeps it; never switch yourself to the worker model/)
+  assert.match(out, /empty id means omit `--model`/)
+  const session = render(fs.readFileSync(new URL('../rules/10-session.md', import.meta.url), 'utf8'), templateValues(defaults()))
+  assert.match(session, /level in `models.levels`[^\n]*is empty, fill it[^\n]*Never overwrite a non-empty level/)
 })

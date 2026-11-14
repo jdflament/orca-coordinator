@@ -19,9 +19,17 @@ paths:
   orca: /Applications/Orca.app/Contents/Resources/bin/orca
 
 agents:
-  coordinator: {agent: claude, statusline: true}
-  worker: {agent: claude, model: null, extraArgs: "", permissionsFile: ~/.claude/settings.json}
-  automation: {provider: claude}
+  # Empty agent = the agent Orca reports for the coordinator's terminal; set one only to pin it.
+  coordinator: {agent: "", statusline: false}
+  worker: {agent: "", extraArgs: "", permissionsFile: null}   # model: <id> here (or agents.coordinator/reader.model) wins over the level
+  automation: {provider: ""}
+
+# Intelligence levels: Light is cheapest, Max is smartest and costs most. Each role runs on a level;
+# a level's model id is for the agent in use (empty = Orca's default). The coordinator fills the ids
+# at session start; the panel's Settings picks the level per role.
+models:
+  levels: {light: "", standard: "", max: ""}
+  roles: {coordinator: max, worker: standard, reader: light}
 
 git:
   branchPattern: "{github}/{ticket-lower}"   # ticket worktree branches

@@ -46,7 +46,7 @@
       .plan:empty { display: none; }
       .plan .what { color: var(--fg); }
       .plan .kept { color: var(--muted); font-size: 11px; }
-      header strong { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+      header strong { flex: none; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
       header .meta { margin-left: auto; color: var(--muted); font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
       .spinner { display: inline-block; width: 10px; height: 10px; margin-right: 4px; vertical-align: -1px; border: 1.5px solid color-mix(in srgb, var(--muted) 30%, transparent); border-top-color: var(--fg); border-radius: 50%; animation: spin 0.8s linear infinite; box-sizing: border-box; }
       @keyframes spin { to { transform: rotate(360deg); } }
@@ -145,8 +145,18 @@
       .setup p.note { color: var(--amber); }
       .form { display: flex; flex-direction: column; gap: 8px; padding: 0 12px; }
       .form > button.primary { align-self: flex-start; }
-      .field { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 8px; align-items: center; min-width: 0; }
-      .field > span { color: var(--muted); font-size: 11px; }
+      .form > * { min-width: 0; }
+      .field { display: grid; grid-template-columns: minmax(0, 84px) minmax(0, 1fr); gap: 4px 8px; align-items: center; min-width: 0; width: 100%; box-sizing: border-box; }
+      .field > span { color: var(--muted); font-size: 11px; min-width: 0; overflow-wrap: anywhere; }
+      .field > * { min-width: 0; }
+      .field > .help { grid-column: 2; color: var(--muted); font-size: 11px; }
+      /* Narrow panel: the label sits above its control instead of beside it. */
+      @media (max-width: 320px) {
+        .field { grid-template-columns: minmax(0, 1fr); }
+        .field > .help { grid-column: 1; }
+      }
+      .advanced { min-width: 0; overflow-wrap: anywhere; }
+      .advanced > summary { cursor: pointer; }
       .field.top { align-items: start; }
       .field.top > span { padding-top: 4px; }
       .checks { display: flex; flex-direction: column; min-width: 0; }
@@ -168,7 +178,7 @@
       .errors { margin: 8px 12px 0; padding: 8px 12px; border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); border-radius: var(--radius-md); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); font-size: 12px; }
       .errors:empty { display: none; }
       .errors div { overflow-wrap: anywhere; }
-      .form-actions { display: flex; gap: 4px; align-items: center; padding: 12px 12px 4px; }
+      .form-actions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; padding: 12px 12px 4px; }
       .form-actions .muted { margin-left: auto; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
       .helper { color: var(--muted); font-size: 11px; }
       .settings .path { color: color-mix(in srgb, var(--muted) 70%, transparent); font-size: 11px; padding: 0 12px 4px; overflow-wrap: anywhere; }
@@ -644,9 +654,10 @@
         if (isSetup) { byId('start').hidden = true; byId('open').hidden = true }
       }
 
-      function field(label, control, top) {
+      function field(label, control, top, help) {
         const node = el('label', top ? 'field top' : 'field')
         node.append(el('span', '', label), control)
+        if (help) node.append(el('span', 'help', help))
         return node
       }
 
@@ -835,6 +846,39 @@
         const language = select(languages.map(([value, label]) => ({ value, label })), person.language || 'en')
         const tone = input(person.tone)
 
+        // Intelligence levels per role. A profile sets the three at once; changing one reads Custom.
+        // The level -> model id mapping is config.yaml's (the coordinator fills it): shown read-only below, never invented here.
+        const models = config.models || {}
+        const LEVELS = [{ value: 'light', label: 'Light' }, { value: 'standard', label: 'Standard' }, { value: 'max', label: 'Max' }]
+        const PROFILES = [
+          { value: 'save', label: 'Save', roles: { coordinator: 'standard', worker: 'light', reader: 'light' } },
+          { value: 'balanced', label: 'Balanced', roles: { coordinator: 'max', worker: 'standard', reader: 'light' } },
+          { value: 'best', label: 'Best', roles: { coordinator: 'max', worker: 'max', reader: 'standard' } }
+        ]
+        const saved = { coordinator: 'max', worker: 'standard', reader: 'light', ...(models.roles || {}) }
+        const roleMenus = {
+          coordinator: select(LEVELS, saved.coordinator),
+          worker: select(LEVELS, saved.worker),
+          reader: select(LEVELS, saved.reader)
+        }
+        const profileOf = () => PROFILES.find((p) => Object.keys(p.roles).every((role) => roleMenus[role].value === p.roles[role]))?.value || 'custom'
+        const profile = select([...PROFILES, { value: 'custom', label: 'Custom' }], profileOf())
+        profile.onchange = () => {
+          const chosen = PROFILES.find((p) => p.value === profile.value)
+          if (chosen) for (const role of Object.keys(chosen.roles)) roleMenus[role].value = chosen.roles[role]
+        }
+        Object.values(roleMenus).forEach((menu) => { menu.onchange = () => { profile.value = profileOf() } })
+        const levelIds = LEVELS.map((level) => el('div', 'helper', level.label + ': ' + (text((models.levels || {})[level.value]) || "Orca's default")))
+        const byHand = ['coordinator', 'worker', 'reader'].filter((role) => text((config.agents || {})[role]?.model))
+        const advanced = el('details', 'advanced')
+        advanced.append(
+          el('summary', 'helper', 'Advanced'),
+          el('div', 'helper', 'Model id per level (the coordinator fills these at session start; empty = Orca\'s default):'),
+          ...levelIds,
+          ...byHand.map((role) => el('div', 'helper', 'agents.' + role + '.model is set in the file and wins over the level.')),
+          el('div', 'helper', 'Edit models.levels in ' + read.path)
+        )
+
         // Repos: the configured ones (kept as they are) plus Orca's others, unchecked.
         const configured = list(config.repos)
         const known = new Set(configured.map((repo) => text(repo.path)))
@@ -872,7 +916,19 @@
         view.replaceChildren(
           el('h2', '', 'Settings'),
           el('div', 'path', read.path),
-          ...form('You', field('Name', name), field('Language', language), field('Tone', tone)),
+          ...form('You',
+            field('Name', name, false, 'What the coordinator calls you.'),
+            field('Language', language, false, 'The language the coordinator uses with you.'),
+            field('Tone', tone, false, 'How the coordinator writes to you, e.g. brief or detailed.')
+          ),
+          ...form('Intelligence',
+            el('div', 'helper', 'Light is cheapest, Max is smartest and costs most. A profile sets all three; change one and it reads Custom.'),
+            field('Profile', profile),
+            field('Coordinator', roleMenus.coordinator, false, 'Plans and judges.'),
+            field('Workers', roleMenus.worker, false, 'Implement and fix.'),
+            field('Readers', roleMenus.reader, false, 'Read-only reviews and triage.'),
+            advanced
+          ),
           ...form('Repositories', el('div', 'helper', 'The coordinator can start workers in these repositories.'), ...skipped, repoChecks),
           errors,
           actions
@@ -903,6 +959,7 @@
           const reposChanged = checkedRepos.length !== reposLoaded.length || checkedRepos.some((entry) => !reposLoaded.includes(text(entry.path)))
           const patch = {
             person: { name: name.value.trim(), language: language.value, tone: tone.value.trim() },
+            models: { roles: { coordinator: roleMenus.coordinator.value, worker: roleMenus.worker.value, reader: roleMenus.reader.value } },
             ...(reposChanged ? { repos: checkedRepos, reposLoaded } : {})
           }
           const local = []

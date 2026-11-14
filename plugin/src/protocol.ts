@@ -206,11 +206,21 @@ export interface ConfigRepo {
 export interface CoordinatorSettings {
   person: { name: string; language: string; tone: string; [key: string]: unknown }
   paths: { package: string; workspace: string; state: string; [key: string]: unknown }
-  agents: { coordinator: { agent: string; [key: string]: unknown }; worker: { agent: string; [key: string]: unknown }; [key: string]: unknown }
+  agents: {
+    coordinator: { agent: string; model?: string | null; [key: string]: unknown }
+    worker: { agent: string; model?: string | null; [key: string]: unknown }
+    reader?: { model?: string | null }
+    [key: string]: unknown
+  }
+  /** Intelligence levels: what each role runs on, and the model id per level (empty = Orca's default). agents.<role>.model, set by hand, wins over a level. */
+  models?: { levels?: Partial<Record<ModelLevel, string>>; roles?: Partial<Record<ModelRole, ModelLevel>> }
   repos: ConfigRepo[]
   /** Everything else (adapters, queue, budget, automations…) is config.yaml-only: the panel never reads or edits it. */
   [key: string]: unknown
 }
+
+export type ModelLevel = 'light' | 'standard' | 'max'
+export type ModelRole = 'coordinator' | 'worker' | 'reader'
 
 /** What `config.read` answers. config is null when there is no config or it cannot be read. */
 export interface ConfigRead {
@@ -228,6 +238,8 @@ export interface ConfigRead {
 export interface ConfigPatch {
   person?: { name?: string; language?: string; tone?: string }
   repos?: ConfigRepo[]
+  /** Only the level per role is editable here; the model id per level lives in config.yaml. */
+  models?: { roles?: Partial<Record<ModelRole, ModelLevel>> }
   /**
    * The repo paths the form showed as watched when it was opened. Given, the save applies only
    * the form's additions and removals to config.yaml's current repos, so a form opened before
