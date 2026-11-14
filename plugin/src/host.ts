@@ -20,3 +20,12 @@ export async function listProjects(host: Host | null, cli: Cli): Promise<Project
   const response = JSON.parse(await cli(['repo', 'list', '--json'])) as { result?: { repos?: Project[] } }
   return response.result?.repos ?? []
 }
+
+export type ReportedAgent = { terminalId: string; kind: string }
+
+/** The agents Orca reports in the focused workspace (`agents.list`): terminal and agent kind. Nothing else names an agent; no host API, no answer. */
+export async function listReportedAgents(host: Host | null): Promise<ReportedAgent[]> {
+  if (!host?.has('agents.list')) return []
+  const answer = (await host.call('agents.list', {}).catch(() => null)) as { agents?: { terminalId: string | null; agent: string | null }[] } | null
+  return (answer?.agents ?? []).filter((row) => row.agent).map((row) => ({ terminalId: String(row.terminalId ?? ''), kind: String(row.agent) }))
+}

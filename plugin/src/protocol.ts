@@ -156,16 +156,16 @@ export interface SetupStatus {
   repos: SetupRepo[]
   /** git config user.name, to prefill the name. */
   personName: string
-  /** Installed agents the skill can be linked into; only the coordinator's own is selected. */
+  /** The agent kinds Orca reports (agents.list); only the coordinator's own is selected. Empty when Orca reports none. */
   agents: SetupAgent[]
   coordinatorAgent: string
-  /** The Claude Code settings file the optional status line badge edits. */
+  /** The settings file the optional status line badge edits, for the coordinator's agent (empty path: not offered). */
   statusLine: { path: string; available: boolean }
   /** The plugin's own folders setup writes (shown with the paths it links or edits). */
   ownPaths: string[]
 }
 
-/** An agent setup can link the coordinator skill into: path is the exact link it would create. */
+/** An agent kind Orca reports: path is the exact link setup would create ('' = no skills folder known, nothing to link). */
 export interface SetupAgent {
   id: string
   name: string
@@ -180,7 +180,9 @@ export interface SetupOptions {
   repos?: string[]
   /** Agent ids whose skills folder gets the link; none given = none linked. */
   agents?: string[]
-  /** Edit statusLine in ~/.claude/settings.json (the ◆ COORDINATOR badge). */
+  /** The agent kind (from Orca's report) the coordinator runs as; sent to init as the coordinator agent. */
+  coordinatorAgent?: string
+  /** Edit statusLine in the settings file status shows (the ◆ COORDINATOR badge). */
   statusLine?: boolean
   /** The user pressed the button on the screen that showed the paths; without it nothing is written. */
   confirmed?: boolean
@@ -198,7 +200,7 @@ export interface ConfigRepo {
 export interface CoordinatorSettings {
   person: { name: string; language: string; tone: string; [key: string]: unknown }
   paths: { package: string; workspace: string; state: string; [key: string]: unknown }
-  agents: { coordinator: { agent: string; [key: string]: unknown }; [key: string]: unknown }
+  agents: { coordinator: { agent: string; [key: string]: unknown }; worker: { agent: string; [key: string]: unknown }; [key: string]: unknown }
   repos: ConfigRepo[]
   /** Everything else (adapters, queue, budget, automations…) is config.yaml-only: the panel never reads or edits it. */
   [key: string]: unknown
@@ -264,7 +266,8 @@ declare module 'orca' {
     /** Needs confirmed: true. Copies the package to its stable home and runs init with the answers: links only the chosen agents. */
     'setup.run': { input: SetupOptions; output: { ok: boolean; output: string } }
     /** Starts the coordinator agent in the configured workspace, in a terminal, focused. */
-    'setup.start': { output: { started: boolean; output: string } }
+    /** agent: the kind the user picked from what Orca reports; choices: asked back when Orca reports several and none was picked. */
+    'setup.start': { input: { agent?: string }; output: { started: boolean; output: string; choices?: string[] } }
     /** Re-points existing skill links that are stale; creates no new link and edits no settings. */
     'setup.updateLinks': { output: { updated: string[] } }
     /** The user's config.yaml, merged with defaults, plus its problems and the choices. */
