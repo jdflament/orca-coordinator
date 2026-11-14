@@ -8,7 +8,8 @@ import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { Board, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
-import { configFile, expandHome, getSetupStatus, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, updateIfInstalledHere } from './setup'
+import { listReportedAgents } from './host'
+import { configFile, expandHome, getSetupStatus, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, staleSkillLinks, updateIfInstalledHere, updateLinks } from './setup'
 import { linkHost } from './links'
 
 const DEFAULT_DIR = '~/.local/state/orca-coordinator'
@@ -237,6 +238,7 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
   const panel: PanelJson = read && typeof read === 'object' ? read : {}
   const handle = await getCoordinatorHandle().catch(() => '')
   const [list, coordinatorLive] = await Promise.all([listWorkers().catch(() => null), handle ? getIsCoordinatorLive(handle).catch(() => false) : Promise.resolve(false)])
+  const config = await getConfig().catch(() => null)
   const derived = await getDerivedWork(board).catch(() => ({ localWork: [] }))
   const { workers, agents } = mergeBoardAgents(list ? getActiveWorkers(list) : [], board.agents ?? [])
   const view: BoardView = {
@@ -249,6 +251,8 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
     workers,
     ...derived,
     coordinatorLive,
+    canStart: config !== null && !coordinatorLive,
+    staleLinks: config ? await staleSkillLinks() : [],
     repoColors: panel.repoColors ?? {},
     oncallLabel: panel.oncallLabel ?? 'oncall'
   }
@@ -292,12 +296,22 @@ async function queueInbox(dir: string, text: string): Promise<void> {
   appendFileSync(path.join(dir, 'inbox.jsonl'), JSON.stringify(entry) + '\n')
 }
 
-/** Opens the configured coordinator agent in a terminal of the configured workspace. */
-async function startCoordinator(): Promise<{ started: boolean; output: string }> {
+/**
+ * Opens the coordinator in a terminal of the configured workspace, as the agent the user chose in the panel,
+ * else the one set in config.yaml, else the only kind Orca reports. Orca offers no default agent and no agent
+ * list, so with several kinds the panel asks which, and with none the user starts it from Orca's own launcher.
+ */
+async function startCoordinator(input: { agent?: string } = {}): Promise<{ started: boolean; output: string; choices?: string[] }> {
   const config = await readConfig()
   if (!config) return { started: false, output: 'The coordinator is not set up yet.' }
+  const kinds = [...new Set((await listReportedAgents(host)).map((row) => row.kind))]
+  const requested = String(input?.agent ?? '').trim()
+  if (requested && !/^[\w.-]+$/.test(requested)) return { started: false, output: `Invalid agent id: ${requested}` }
+  const agent = requested || String(config.agents.coordinator.agent ?? '').trim() || (kinds.length === 1 ? kinds[0] : '')
+  if (!agent && kinds.length > 1) return { started: false, output: 'Pick the agent to start the coordinator with (the agents Orca reports).', choices: kinds }
+  if (!agent) return { started: false, output: "Orca does not report an agent to start here. Start the coordinator from Orca's own agent launcher (a new agent tab in " + config.paths.workspace + '), then ask it to load the coordinator skill.' }
   const prompt = 'Load the coordinator skill and start a coordinator session.'
-  const args = ['agent', 'launch', '--agent', config.agents.coordinator.agent, '--worktree', `path:${config.paths.workspace}`, '--prompt', prompt, '--surface', 'terminal', '--focus', '--json']
+  const args = ['agent', 'launch', '--agent', agent, '--worktree', `path:${config.paths.workspace}`, '--prompt', prompt, '--surface', 'terminal', '--focus', '--json']
   try {
     await runOrca(args, 60000)
     return { started: true, output: '' }
@@ -338,12 +352,13 @@ async function openWorkspaceBoard(): Promise<{ opened: boolean; error?: string }
 export default function activate(orca: OrcaWorkerApi): void {
   settings = orca.settings
   host = orca.host
-  // Orca installed a new version of the plugin: bring the coordinator package up to date with it.
+  // Orca installed a new version of the plugin: refresh the plugin's own files (never agent config).
   void updateIfInstalledHere().catch(() => undefined)
 
-  orca.panels.handle('setup.status', () => getSetupStatus(runOrca, host))
+  orca.panels.handle('setup.status', async () => getSetupStatus(runOrca, host, await getCoordinatorHandle().catch(() => '')))
   orca.panels.handle('setup.run', (options) => runSetup(options ?? { workspace: '' }))
-  orca.panels.handle('setup.start', () => startCoordinator())
+  orca.panels.handle('setup.start', (input) => startCoordinator((input ?? {}) as { agent?: string }))
+  orca.panels.handle('setup.updateLinks', () => updateLinks())
   orca.panels.handle('config.read', () => readSettings(runOrca, host))
   orca.panels.handle('config.save', ({ patch }) => saveSettings(patch))
   orca.panels.handle('config.removeRepo', ({ path: target }) => removeSkippedRepo(String(target ?? '')))

@@ -160,9 +160,9 @@ const QUESTIONS = [
   { key: 'person.uiTermsLanguage', flag: 'ui-language', ask: 'Language UI labels are quoted in' },
   { key: 'paths.workspace', flag: 'workspace', ask: 'Orca workspace folder that hosts the coordinator', choices: listMainWorktrees },
   { key: 'paths.worktreeRoot', flag: 'worktree-root', ask: 'Folder where Orca creates worktrees (cleanup only touches these)' },
-  { key: 'agents.coordinator.agent', flag: 'coordinator-agent', ask: 'Agent id for the coordinator (claude, codex, opencode, …)' },
-  { key: 'agents.worker.agent', flag: 'worker-agent', ask: 'Agent id for workers' },
-  { key: 'agents.automation.provider', flag: 'automation-provider', ask: 'Agent id automations start when no coordinator is live' },
+  { key: 'agents.coordinator.agent', flag: 'coordinator-agent', ask: 'Agent id for the coordinator (empty: the agent Orca reports)' },
+  { key: 'agents.worker.agent', flag: 'worker-agent', ask: 'Agent id for workers (empty: the coordinator\'s own)' },
+  { key: 'agents.automation.provider', flag: 'automation-provider', ask: 'Agent id automations start when no coordinator is live (empty: Orca\'s default)' },
   { key: 'github.org', flag: 'github-org', ask: 'GitHub organisation (owner) of your repos' },
   // Ticketing and chat are detected by the coordinator (MCP servers, CLIs): never asked. These flags
   // only write the optional CLI adapters the zero-model shell prechecks use (advanced).
@@ -300,8 +300,6 @@ function detectGithubOrg(repos) {
   return [...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? ''
 }
 
-const KNOWN_AGENTS = ['claude', 'codex', 'opencode']
-
 /** Fill every value the machine can tell, leaving alone what the config file or a flag already set. */
 function detectDefaults(config, keep) {
   const free = (key) => !keep(key)
@@ -311,12 +309,6 @@ function detectDefaults(config, keep) {
   if (free('person.uiTermsLanguage')) config.person.uiTermsLanguage = config.person.language
   if (free('paths.workspace')) config.paths.workspace = detectWorkspace(config)
   if (free('paths.worktreeRoot')) config.paths.worktreeRoot = detectWorktreeRoot(config)
-  const agent = KNOWN_AGENTS.find((a) => which(a))
-  if (agent) {
-    if (free('agents.coordinator.agent')) config.agents.coordinator.agent = agent
-    if (free('agents.worker.agent')) config.agents.worker.agent = agent
-    if (free('agents.automation.provider')) config.agents.automation.provider = agent
-  }
   const ws = config.paths.workspace
   if (free('repos')) config.repos = ws ? listRepos(config).filter((r) => r.path === ws || r.path.startsWith(ws + path.sep)) : []
   if (free('github.org')) config.github.org = detectGithubOrg(config.repos) || config.person.github
@@ -330,10 +322,12 @@ function summary(config) {
     ['You', `${config.person.name}${config.person.github ? ` (github: ${config.person.github})` : ''}, language ${config.person.language}`],
     ['Workspace', shown(config.paths.workspace)],
     ['Worktrees', shown(config.paths.worktreeRoot)],
-    ['Agent', `${config.agents.coordinator.agent} (coordinator), ${config.agents.worker.agent} (workers)`],
+    ['Agent', config.agents.coordinator.agent ? `${config.agents.coordinator.agent} (coordinator), ${config.agents.worker.agent || 'the coordinator\'s own'} (workers)` : '(none set: the agent comes from Orca)'],
     ['GitHub org', config.github.org || '(none)'],
     ['Repos', config.repos.map((r) => r.name).join(', ') || '(none)'],
     ['Tools', `detected by the coordinator at session start${a.ticketing.kind !== 'none' || a.chat.kind !== 'none' ? ` (CLI adapters for prechecks: ticketing ${a.ticketing.kind}, chat ${a.chat.kind})` : ''}, flags ${a.flags.kind}`],
+    ['Skill links', skillLinks(config).join(', ') || '(none)'],
+    ['Status line', config.agents.coordinator.statusline ? '~/.claude/settings.json (statusLine, backup kept)' : '(untouched)'],
     ['Automations', `${config.automations.enabled ? 'on' : 'off'} (${config.automations.timezone})`]
   ]
   return rows.map(([k, v]) => `  ${k.padEnd(12)} ${v}`).join('\n')
@@ -377,6 +371,7 @@ async function init() {
   if (opt('branch-pattern')) config.git.branchPattern = opt('branch-pattern')
   if (has('automations')) config.automations.enabled = true
   if (has('statusline')) config.agents.coordinator.statusline = true
+  if (has('no-statusline')) config.agents.coordinator.statusline = false
   if (opt('timezone')) config.automations.timezone = opt('timezone')
 
   // Show what was found; one Enter installs it, "e" walks through every question.
@@ -420,7 +415,7 @@ async function init() {
   if (config.automations.enabled) automationsInstall(config)
 
   report()
-  console.log(`\nNext: open a terminal in ${config.paths.workspace}, start ${config.agents.coordinator.agent}, and ask it to load the coordinator skill.`)
+  console.log(`\nNext: open a terminal in ${config.paths.workspace}, start your agent from Orca, and ask it to load the coordinator skill.`)
   console.log(`Config: ${configPath}\nState:  ${config.paths.state}`)
 }
 
@@ -564,13 +559,25 @@ const SKILL_DIRS = [
   { agent: 'agents', dir: '~/.agents/skills/coordinator' }
 ]
 
+/**
+ * Links the skill into the agents' skills folders. Only what was asked for: --skill-agent <id>
+ * (repeatable), else the coordinator's own agent; --no-skill-link links nothing; --skill-dir <dir>
+ * adds a folder. A folder that merely exists is never linked into.
+ */
+function skillAgents(config) {
+  return new Set(has('no-skill-link') ? [] : opts('skill-agent').length ? opts('skill-agent') : [config.agents.coordinator.agent])
+}
+
+/** The folders installSkill will link into, as shown before the user confirms. */
+function skillLinks(config) {
+  const wanted = skillAgents(config)
+  return [...SKILL_DIRS.filter((entry) => wanted.has(entry.agent)).map((entry) => entry.dir), ...opts('skill-dir')]
+}
+
 function installSkill(config) {
   const target = path.join(PACKAGE_ROOT, 'skill', 'coordinator')
-  const wanted = new Set([config.agents.coordinator.agent, config.agents.worker.agent, ...opts('skill-dir')])
-  for (const entry of SKILL_DIRS) {
-    const parent = path.dirname(expandHome(entry.dir))
-    if (wanted.has(entry.agent) || fs.existsSync(parent)) symlink(target, expandHome(entry.dir))
-  }
+  const wanted = skillAgents(config)
+  for (const entry of SKILL_DIRS) if (wanted.has(entry.agent)) symlink(target, expandHome(entry.dir))
   for (const dir of opts('skill-dir')) symlink(target, expandHome(dir))
   if (wanted.has('codex')) did('note', `codex reads no skills folder: paste ${target}/SKILL.md into ~/.codex/AGENTS.md`)
 }
@@ -694,7 +701,7 @@ function automationArgs(config, job) {
     '--name', automationName(job),
     '--trigger', job.schedule,
     '--prompt', `[trigger] ${job.playbook}`,
-    '--provider', config.agents.automation.provider,
+    ...(config.agents.automation.provider ? ['--provider', config.agents.automation.provider] : []),
     '--precheck', path.join(config.paths.state, 'automations', `route-${job.playbook}.sh`),
     '--precheck-timeout', '120',
     '--workspace', `path:${config.paths.workspace}`,
@@ -841,6 +848,10 @@ function doctor() {
   for (const tool of ['gh', 'jq', 'git']) ok(tool, Boolean(which(tool)), which(tool) || 'not on PATH')
   if (config) {
     for (const [role, agent] of [['coordinator', config.agents.coordinator.agent], ['worker', config.agents.worker.agent], ['automation', config.agents.automation.provider]]) {
+      if (!agent) {
+        ok(`${role} agent`, true, 'not set: comes from Orca')
+        continue
+      }
       const bin = which(agent)
       ok(`${role} agent "${agent}"`, true, bin ? bin : 'not on PATH (fine when Orca launches it by id)')
     }
@@ -958,7 +969,9 @@ function usage() {
                       advanced (CLI adapters for shell prechecks; tools are detected otherwise):
                       --ticketing <kind> --ticketing-team --issue-url --chat <kind> --draft-only-channels a,b
                       --repo <path> (repeatable) | --no-repos
-                      --automations --statusline --timezone --skill-dir <dir> --no-plugin
+                      --automations --statusline | --no-statusline --timezone --no-plugin
+                      --skill-agent <claude|opencode|agents|codex> (repeatable; default: the coordinator's agent)
+                      --no-skill-link | --skill-dir <dir>
                       --config <file> --state <dir> --force
   render       rebuild COORDINATOR.md, playbooks/, panel.json and the bin wrappers from config
   tools        print the tools the coordinator recorded; --set "Linear:mcp,GitHub:gh" records them (names only)
@@ -1002,6 +1015,10 @@ async function main() {
       for (const key of Object.keys(values).filter((k) => k.startsWith('paths.') || k === 'configPath').sort()) console.log(`${key.padEnd(26)} ${values[key]}`)
       return
     }
+    case 'agent-files':
+      // The files init may write per agent id, so the plugin shows exact paths (Orca documents none).
+      console.log(JSON.stringify({ skill: Object.fromEntries(SKILL_DIRS.map((entry) => [entry.agent, entry.dir])), statusLine: { claude: '~/.claude/settings.json' } }))
+      return
     case 'doctor':
       return doctor()
     case 'statusline': {

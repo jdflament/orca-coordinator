@@ -2,11 +2,12 @@
 // ORCA_CLI_BIN_DIR and a temp coordinator state folder.
 import { assert, mockHost, mountWorker, test } from 'orca/testing'
 import { execFileSync } from 'node:child_process'
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as main from './worker'
 import { listProjects, type Host } from './host'
+import { updateIfInstalledHere } from './setup'
 import type { ConfigPatch } from './protocol'
 
 const busy = new URL('./fixtures/busy.json', import.meta.url).pathname
@@ -388,8 +389,15 @@ function writeConfig(home: string, extra = '', repos?: { name: string; path: str
   return file
 }
 
-async function mount(home: string) {
-  return mountWorker(main, { host: mockHost({ settings: { coordinatorDir: join(home, '.local/state/orca-coordinator') } }) })
+/** kinds: what Orca's agents.list reports in the focused workspace (the first kind runs in the coordinator terminal). No kinds = Orca reports nothing. */
+async function mount(home: string, kinds: string[] = []) {
+  const agents = kinds.map((agent, i) => ({ terminalId: i === 0 ? 'term_coord' : `term_other${i}`, title: null, agent, state: 'working', stateStartedAt: 0 }))
+  const dir = join(home, '.local/state/orca-coordinator')
+  if (kinds.length) {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'coordinator-terminal'), 'term_coord\n')
+  }
+  return mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir }, results: { 'agents.list': { agents } } }) })
 }
 
 test('setup: defaults to the first Orca folder, applies the form answers, then starts the coordinator there', async () => {
@@ -408,14 +416,14 @@ test('setup: defaults to the first Orca folder, applies the form answers, then s
       { path: join(workspace, 'notes'), displayName: 'notes', kind: 'git' }
     ]
     await withFakeOrca(false, async (log) => {
-      const worker = await mount(home)
+      const worker = await mount(home, ['claude'])
       const before = await worker.request('setup.status')
       assert.equal(before.configured, false)
       assert.equal(before.workspaces[0].path, workspace, 'the folder is the default, not the first or shortest repo')
       assert.deepEqual(before.repos.map((r) => r.name), ['x', 'api', 'web'], 'folders, and paths git does not confirm, are not offered as repos to watch')
       assert.equal(before.personName, 'Alex Martin', 'the name is prefilled from git config')
 
-      const result = await worker.request('setup.run', { workspace, name: 'Alex', repos: [join(workspace, 'api')] })
+      const result = await worker.request('setup.run', { workspace, name: 'Alex', repos: [join(workspace, 'api')], agents: ['claude'], coordinatorAgent: 'claude', confirmed: true })
       assert.ok(result.ok, result.output)
       const packageHome = join(home, '.local/share/orca-coordinator')
       assert.ok(existsSync(join(packageHome, 'bin', 'coordinator.mjs')), 'package copied to its stable home')
@@ -429,7 +437,7 @@ test('setup: defaults to the first Orca folder, applies the form answers, then s
       assert.deepEqual(read.config?.repos.map((r) => r.name), ['api'], 'only the checked repo is watched, not every repo in the folder')
       assert.equal((await worker.request('setup.status')).configured, true)
 
-      assert.deepEqual(await worker.request('setup.start'), { started: true, output: '' })
+      assert.deepEqual(await worker.request('setup.start', {}), { started: true, output: '' })
       assert.ok(readFileSync(log, 'utf8').includes(`agent launch --agent claude --worktree path:${workspace}`))
       await worker.deactivate()
     }, repos)
@@ -442,7 +450,7 @@ test('setup: a form init would reject writes nothing', async () => {
     mkdirSync(workspace)
     await withFakeOrca(false, async () => {
       const worker = await mount(home)
-      const missing = await worker.request('setup.run', { workspace: join(home, 'gone') })
+      const missing = await worker.request('setup.run', { workspace: join(home, 'gone'), confirmed: true })
       assert.equal(missing.ok, false)
       assert.ok(!existsSync(join(home, '.config/orca-coordinator')), 'no config written')
       assert.ok(!existsSync(join(home, '.local/share/orca-coordinator')), 'package not copied')
@@ -873,4 +881,188 @@ test('board.get writes worker-terminals for the status line: each worker termina
     { dispatchId: 'd', state: 'running', terminal: 'bad handle; rm', taskId: 't4' },
     { dispatchId: 'e', state: 'succeeded', terminal: null, taskId: 't5' }
   ])
+})
+
+/** A home where Claude Code and OpenCode are installed (their config folders exist) and the user has a settings.json. */
+function agentHome(home: string): { settings: string; before: string } {
+  mkdirSync(join(home, '.claude/skills'), { recursive: true })
+  mkdirSync(join(home, '.config/opencode/skills'), { recursive: true })
+  const settings = join(home, '.claude/settings.json')
+  const before = '{\n  "theme": "dark",\n  "statusLine": { "type": "command", "command": "my-line" }\n}\n'
+  writeFileSync(settings, before)
+  return { settings, before }
+}
+
+test('setup: without the confirmation nothing is written, not even this plugin\'s own files or any agent folder', async () => {
+  await withHome(async (home) => {
+    const workspace = join(home, 'work')
+    mkdirSync(workspace)
+    const { settings, before } = agentHome(home)
+    await withFakeOrca(false, async () => {
+      const worker = await mount(home)
+      for (const unconfirmed of [{}, { confirmed: false }, { confirmed: 'yes' as unknown as boolean }]) {
+        const result = await worker.request('setup.run', { workspace, agents: ['claude', 'opencode'], statusLine: true, ...unconfirmed })
+        assert.equal(result.ok, false)
+      }
+      assert.ok(!existsSync(join(home, '.claude/skills/coordinator')) && !existsSync(join(home, '.config/opencode/skills/coordinator')), 'no skill link')
+      assert.equal(readFileSync(settings, 'utf8'), before, 'settings.json untouched')
+      assert.ok(!existsSync(join(home, '.config/orca-coordinator')) && !existsSync(join(home, '.local/share/orca-coordinator')), 'no own files either')
+      await worker.deactivate()
+    })
+  })
+})
+
+test('setup: the screen lists only the agents Orca reports, and a confirmed setup links exactly the picked ones and leaves settings.json alone unless asked', async () => {
+  await withHome(async (home) => {
+    const workspace = join(home, 'work')
+    mkdirSync(workspace)
+    const { settings, before } = agentHome(home)
+    await withFakeOrca(false, async () => {
+      const worker = await mount(home, ['opencode', 'unlisted-kind'])
+      const status = await worker.request('setup.status')
+      assert.deepEqual(status.agents.map((a) => a.id), ['opencode', 'unlisted-kind'], 'exactly the kinds Orca reports, even though another agent\'s folder exists here')
+      assert.ok(status.agents.every((a) => a.selected === (a.id === 'opencode')), 'only the kind of the coordinator terminal is preselected')
+      assert.equal(status.coordinatorAgent, 'opencode')
+      assert.equal(status.agents[0].path, '~/.config/opencode/skills/coordinator')
+      assert.equal(status.agents[1].path, '', 'a kind with no known skills folder gets no link')
+      assert.equal(status.statusLine.available, false, 'no status line file known for this agent')
+
+      const result = await worker.request('setup.run', { workspace, agents: ['opencode'], coordinatorAgent: 'opencode', confirmed: true })
+      assert.ok(result.ok, result.output)
+      const skill = join(home, '.local/share/orca-coordinator/skill/coordinator')
+      assert.equal(readlinkSync(join(home, '.config/opencode/skills/coordinator')), skill)
+      assert.ok(!existsSync(join(home, '.claude/skills/coordinator')), 'not reported by Orca, not picked: its folder exists but gets no link')
+      assert.equal(readFileSync(settings, 'utf8'), before, 'the status line is only edited when asked for')
+      assert.equal((await worker.request('config.read')).config?.agents.coordinator.agent, 'opencode')
+      await worker.deactivate()
+    })
+  })
+})
+
+test('setup with no Orca data names no agent: nothing listed, nothing preselected, no status line, no link, no coordinator agent in config', async () => {
+  await withHome(async (home) => {
+    const workspace = join(home, 'work')
+    mkdirSync(workspace)
+    agentHome(home)
+    await withFakeOrca(false, async () => {
+      const worker = await mount(home)
+      const status = await worker.request('setup.status')
+      assert.deepEqual([status.agents, status.coordinatorAgent, status.statusLine.available], [[], '', false])
+      assert.ok(!/claude|opencode|codex|gemini/i.test(JSON.stringify(status)), 'the rendered setup data carries no agent name')
+      const result = await worker.request('setup.run', { workspace, confirmed: true })
+      assert.ok(result.ok, result.output)
+      assert.ok(!existsSync(join(home, '.claude/skills/coordinator')) && !existsSync(join(home, '.config/opencode/skills/coordinator')))
+      const config = (await worker.request('config.read')).config
+      assert.deepEqual([config?.agents.coordinator.agent, config?.agents.worker.agent], ['', ''], 'no default agent')
+      await worker.deactivate()
+    })
+  })
+})
+
+test('Start coordinator: the agent comes from what Orca reports or what the user picked; with neither, the user starts it from Orca\'s launcher', async () => {
+  await withHome(async (home) => {
+    const workspace = join(home, 'work')
+    mkdirSync(workspace)
+    await withFakeOrca(false, async (log) => {
+      assert.ok((await (await mount(home)).request('setup.run', { workspace, confirmed: true })).ok)
+      const launches = () => readFileSync(log, 'utf8').split('\n').filter((line) => line.startsWith('agent launch'))
+
+      const none = await (await mount(home)).request('setup.start', {})
+      assert.equal(none.started, false)
+      assert.match(none.output, /Orca's own agent launcher/)
+      assert.deepEqual(launches(), [], 'nothing launched without an agent')
+
+      const several = await (await mount(home, ['kind-a', 'kind-b'])).request('setup.start', {})
+      assert.deepEqual([several.started, several.choices], [false, ['kind-a', 'kind-b']], 'asks which of the reported kinds')
+      assert.deepEqual(launches(), [])
+
+      assert.equal((await (await mount(home, ['kind-a', 'kind-b'])).request('setup.start', { agent: 'kind-b' })).started, true)
+      assert.equal((await (await mount(home, ['kind-c'])).request('setup.start', {})).started, true, 'a single reported kind needs no question')
+      assert.deepEqual(launches().map((line) => line.match(/--agent (\S+)/)?.[1]), ['kind-b', 'kind-c'])
+      assert.ok(launches().every((line) => !line.includes('--model')), 'no model unless the user configured one')
+    })
+  })
+})
+
+test('no agent or model name appears in the plugin UI code paths', () => {
+  const files = ['panel/index.html', 'src/setup.ts', 'src/worker.ts', 'src/protocol.ts', 'src/host.ts', 'src/links.ts']
+  for (const file of files) {
+    const source = readFileSync(new URL(`../${file}`, import.meta.url), 'utf8')
+    const hit = /claude|opencode|codex|gemini|anthropic|gpt-|sonnet|opus|haiku/i.exec(source)
+    assert.equal(hit, null, `${file} names "${hit?.[0]}"`)
+  }
+})
+
+test('setup: the status line badge edits settings.json only when ticked, keeping the other settings and a backup', async () => {
+  await withHome(async (home) => {
+    const workspace = join(home, 'work')
+    mkdirSync(workspace)
+    const { settings } = agentHome(home)
+    await withFakeOrca(false, async () => {
+      const worker = await mount(home)
+      assert.ok((await worker.request('setup.run', { workspace, agents: [], coordinatorAgent: 'claude', statusLine: true, confirmed: true })).ok)
+      const after = JSON.parse(readFileSync(settings, 'utf8'))
+      assert.equal(after.theme, 'dark')
+      assert.ok(String(after.statusLine.command).endsWith('statusline.sh'))
+      assert.ok(!existsSync(join(home, '.claude/skills/coordinator')), 'no agent ticked: no link')
+      await worker.deactivate()
+    })
+  })
+})
+
+test('plugin update refreshes the plugin\'s own files only: stale agent links and settings.json stay as they are, the panel offers "Update links"', async () => {
+  await withHome(async (home) => {
+    const workspace = join(home, 'work')
+    mkdirSync(workspace)
+    const { settings, before } = agentHome(home)
+    await withFakeOrca(false, async () => {
+      const worker = await mount(home)
+      assert.ok((await worker.request('setup.run', { workspace, agents: ['claude'], confirmed: true })).ok)
+      const packageHome = join(home, '.local/share/orca-coordinator')
+      // An older install left the Claude link pointing at its own folder; the plugin was updated (marker gone, home outdated).
+      const old = join(home, 'old/skill/coordinator')
+      mkdirSync(old, { recursive: true })
+      rmSync(join(home, '.claude/skills/coordinator'))
+      symlinkSync(old, join(home, '.claude/skills/coordinator'))
+      writeFileSync(join(packageHome, 'bin/coordinator.mjs'), '// outdated\n')
+      rmSync(join(packageHome, '.installed-from'))
+
+      assert.equal((await updateIfInstalledHere()).updated, true)
+      assert.notEqual(readFileSync(join(packageHome, 'bin/coordinator.mjs'), 'utf8'), '// outdated\n', 'own files refreshed')
+      assert.equal(readlinkSync(join(home, '.claude/skills/coordinator')), old, 'the stale link was not touched by the update')
+      assert.ok(!existsSync(join(home, '.config/opencode/skills/coordinator')), 'no new link in another agent')
+      assert.equal(readFileSync(settings, 'utf8'), before, 'settings.json untouched')
+
+      assert.deepEqual((await worker.request('board.get')).staleLinks, ['~/.claude/skills/coordinator'])
+      assert.deepEqual(await worker.request('setup.updateLinks'), { updated: ['~/.claude/skills/coordinator'] })
+      assert.equal(readlinkSync(join(home, '.claude/skills/coordinator')), join(packageHome, 'skill/coordinator'))
+      assert.deepEqual((await worker.request('board.get')).staleLinks, [])
+      assert.ok(!existsSync(join(home, '.config/opencode/skills/coordinator')), 'Update links never creates a link')
+      await worker.deactivate()
+    })
+  })
+})
+
+test('board.get canStart: Start coordinator shows only when set up and not running', async () => {
+  await withHome(async (home) => {
+    // Not set up: no config.yaml.
+    await withFakeOrca(false, async () => {
+      const worker = await mount(home)
+      assert.equal((await worker.request('board.get')).canStart, false, 'not set up')
+      await worker.deactivate()
+    })
+    writeConfig(home)
+    await withFakeOrca(false, async () => {
+      const worker = await mount(home)
+      assert.equal((await worker.request('board.get')).canStart, true, 'set up, stopped')
+      await worker.deactivate()
+    })
+    mkdirSync(join(home, '.local/state/orca-coordinator'), { recursive: true })
+    writeFileSync(join(home, '.local/state/orca-coordinator/coordinator-terminal'), 'term_coord\n')
+    await withFakeOrca(true, async () => {
+      const worker = await mount(home)
+      assert.equal((await worker.request('board.get')).canStart, false, 'running')
+      await worker.deactivate()
+    })
+  })
 })

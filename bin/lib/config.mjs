@@ -57,9 +57,9 @@ export function defaults() {
       orca: defaultOrcaBin()
     },
     agents: {
-      coordinator: { agent: 'claude', statusline: false },
-      worker: { agent: 'claude', model: null, extraArgs: '', permissionsFile: null },
-      automation: { provider: 'claude' }
+      coordinator: { agent: '', statusline: false },
+      worker: { agent: '', model: null, extraArgs: '', permissionsFile: null },
+      automation: { provider: '' }
     },
     git: { branchPattern: '{github}/{ticket-lower}', prTitlePattern: '{ticket}: {title}', protectedBranches: ['main', 'master', 'develop'] },
     repos: [],
@@ -175,7 +175,6 @@ export function validate(config) {
   if (!config.person.name) problems.push('person.name is empty')
   if (!config.paths.workspace) problems.push('paths.workspace is empty (the Orca workspace folder the coordinator runs in)')
   if (!config.paths.state) problems.push('paths.state is empty')
-  if (!config.agents.worker.agent) problems.push('agents.worker.agent is empty')
   if (!TICKETING_KINDS.includes(config.adapters.ticketing.kind)) problems.push(`adapters.ticketing.kind must be one of ${TICKETING_KINDS.join('|')}`)
   if (!CHAT_KINDS.includes(config.adapters.chat.kind)) problems.push(`adapters.chat.kind must be one of ${CHAT_KINDS.join('|')}`)
   if (!FLAGS_KINDS.includes(config.adapters.flags.kind)) problems.push(`adapters.flags.kind must be one of ${FLAGS_KINDS.join('|')}`)

@@ -3,12 +3,12 @@
 // stable home (the skill link, wrappers and automations point there) and init runs from it.
 // Runs on the user's own node, not Orca's: init writes that path into the wrappers.
 import { execFile } from 'node:child_process'
-import { cpSync, existsSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { cpSync, existsSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ConfigPatch, ConfigRepo, ConfigRead, ConfigSave, CoordinatorSettings, SetupOptions, SetupRepo, SetupStatus, SetupWorkspace } from './protocol'
-import { listProjects, type Host } from './host'
+import type { ConfigPatch, ConfigRepo, ConfigRead, ConfigSave, CoordinatorSettings, SetupAgent, SetupOptions, SetupRepo, SetupStatus, SetupWorkspace } from './protocol'
+import { listProjects, listReportedAgents, type Host } from './host'
 
 /** This plugin's root: src/ → plugin/ → the package. */
 export const PACKAGE_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
@@ -183,8 +183,72 @@ export function listWorkspaces(repos: SetupRepo[]): SetupWorkspace[] {
     .map((repo) => ({ path: repo.path, name: repo.path.startsWith(home + '/') ? '~' + repo.path.slice(home.length) : repo.path }))
 }
 
-export async function getSetupStatus(orca: Orca, host: Host | null = null): Promise<SetupStatus> {
+// ---- the other agents' config: only written after the user confirmed the exact paths ----
+
+/** Where init may write per agent id: asked of the CLI, so no agent or path is named in this UI. */
+type AgentFiles = { skill: Record<string, string>; statusLine: Record<string, string> }
+let agentFilesCache: { node: string; files: AgentFiles } | null = null
+
+async function agentFiles(): Promise<AgentFiles> {
+  const none: AgentFiles = { skill: {}, statusLine: {} }
+  const node = await findNode()
+  if (!node) return none
+  if (agentFilesCache?.node === node) return agentFilesCache.files
+  const result = await run(node, [path.join(PACKAGE_DIR, 'bin', 'coordinator.mjs'), 'agent-files'])
+  try {
+    const files = { ...none, ...(JSON.parse(result.stdout) as Partial<AgentFiles>) }
+    agentFilesCache = { node, files }
+    return files
+  } catch {
+    return none
+  }
+}
+
+const tilde = (value: string): string => (value.startsWith(os.homedir() + '/') ? '~' + value.slice(os.homedir().length) : value)
+
+/**
+ * The agents come from Orca (`agents.list`): the kinds it reports running in the focused workspace,
+ * the coordinator's own terminal first and the only one preselected (when it is the only kind, that one).
+ * A kind with no known skills folder is listed with an empty path: nothing can be linked for it.
+ */
+export async function reportedAgents(host: Host | null, coordinatorHandle: string): Promise<{ agents: SetupAgent[]; coordinatorAgent: string }> {
+  const rows = await listReportedAgents(host)
+  const own = rows.find((row) => coordinatorHandle && row.terminalId === coordinatorHandle)?.kind ?? ''
+  const kinds = [...new Set([...(own ? [own] : []), ...rows.map((row) => row.kind)])]
+  const coordinatorAgent = own || (kinds.length === 1 ? kinds[0] : '')
+  const files = await agentFiles()
+  return { agents: kinds.map((id) => ({ id, name: id, path: files.skill[id] ?? '', selected: id === coordinatorAgent })), coordinatorAgent }
+}
+
+/** Skill links that point at another copy of this package's skill (or nowhere): the ones an update leaves for the user to refresh. */
+export async function staleSkillLinks(): Promise<string[]> {
+  const current = path.join(homeDir(), 'skill', 'coordinator')
+  return Object.values((await agentFiles()).skill).filter((shown) => {
+    try {
+      const target = readlinkSync(expandHome(shown))
+      return target !== current && target.endsWith(path.join('skill', 'coordinator'))
+    } catch {
+      return false
+    }
+  })
+}
+
+/** Points the stale links at this package's skill: only links that already exist and are ours, nothing new. */
+export async function updateLinks(): Promise<{ updated: string[] }> {
+  const target = path.join(homeDir(), 'skill', 'coordinator')
+  const updated = await staleSkillLinks()
+  for (const shown of updated) {
+    const link = expandHome(shown)
+    rmSync(link, { force: true })
+    symlinkSync(target, link)
+  }
+  return { updated }
+}
+
+export async function getSetupStatus(orca: Orca, host: Host | null = null, coordinatorHandle = ''): Promise<SetupStatus> {
   const [node, repos, personName] = await Promise.all([findNode(), listOrcaRepos(orca, host).catch(() => [] as SetupRepo[]), gitUserName()])
+  const agents = await reportedAgents(host, coordinatorHandle)
+  const statusLinePath = (await agentFiles()).statusLine[agents.coordinatorAgent] ?? ''
   return {
     configured: await isConfigValid(node),
     version: versionOf(PACKAGE_DIR),
@@ -192,7 +256,11 @@ export async function getSetupStatus(orca: Orca, host: Host | null = null): Prom
     // Where the coordinator lives may be a folder; what it watches is git repositories only.
     workspaces: listWorkspaces(repos),
     repos: await onlyGitRepos(repos.filter((repo) => !repo.folder)),
-    personName
+    personName,
+    ...agents,
+    // Offered only for the coordinator's own agent, and only when the CLI knows that agent's status-line file.
+    statusLine: { path: statusLinePath, available: Boolean(statusLinePath) },
+    ownPaths: [tilde(homeDir()), tilde(path.dirname(configFile())), '~/.local/state/orca-coordinator']
   }
 }
 
@@ -200,13 +268,23 @@ export async function getSetupStatus(orca: Orca, host: Host | null = null): Prom
  * Checks the setup form before anything is written; returns the init flags or the problems.
  * No tool fields: the coordinator uses whatever tools its agent has (a ticketing / chat key in the form is ignored).
  */
-function setupFlags(options: SetupOptions): { args: string[]; problems: string[] } {
+async function setupFlags(options: SetupOptions): Promise<{ args: string[]; problems: string[] }> {
   const problems: string[] = []
   const workspace = String(options.workspace ?? '')
   if (!workspace || !existsSync(workspace)) problems.push(`workspace not found: ${workspace}`)
   const args = ['--workspace', workspace]
   const name = String(options.name ?? '').trim()
   if (name) args.push('--name', name)
+  const agents = Array.isArray(options.agents) ? options.agents.map(String) : []
+  const skillDirs = (await agentFiles()).skill
+  const unknown = agents.filter((id) => !(id in skillDirs))
+  if (unknown.length) problems.push(`no skills folder known for: ${unknown.join(', ')}`)
+  const coordinatorAgent = String(options.coordinatorAgent ?? '').trim()
+  if (coordinatorAgent && !/^[\w.-]+$/.test(coordinatorAgent)) problems.push(`invalid agent id: ${coordinatorAgent}`)
+  else if (coordinatorAgent) args.push('--coordinator-agent', coordinatorAgent)
+  if (agents.length === 0) args.push('--no-skill-link')
+  for (const id of agents) args.push('--skill-agent', id)
+  args.push(options.statusLine === true ? '--statusline' : '--no-statusline')
   if (Array.isArray(options.repos)) {
     if (options.repos.length === 0) args.push('--no-repos')
     for (const repo of options.repos) args.push('--repo', String(repo))
@@ -214,11 +292,12 @@ function setupFlags(options: SetupOptions): { args: string[]; problems: string[]
   return { args, problems }
 }
 
-/** First setup: copy the package home and run init for the chosen workspace and answers. */
+/** First setup: copy the package home and run init for the chosen workspace and answers. Writes nothing until the user confirmed the paths the screen showed. */
 export async function runSetup(options: SetupOptions): Promise<{ ok: boolean; output: string }> {
+  if (options.confirmed !== true) return { ok: false, output: 'Setup was not confirmed: nothing was written.' }
   const node = await findNode()
   if (!node) return { ok: false, output: NO_NODE }
-  const { args, problems } = setupFlags(options)
+  const { args, problems } = await setupFlags(options)
   if (problems.length) return { ok: false, output: problems.join('\n') }
   syncPackage()
   return init(node, args)
@@ -353,16 +432,17 @@ export async function removeSkippedRepo(target: string): Promise<ConfigSave> {
 }
 
 /**
- * After Orca updates the plugin: refresh the stable home and re-render, but only for a setup
- * this plugin made (a clone used with setup.sh keeps pointing at the clone).
+ * After Orca updates the plugin: refresh the plugin's own files only (the stable home, then the
+ * rendered rules and wrappers), and only for a setup this plugin made. Agent links and settings are
+ * never written here: stale links are shown in the panel with an "Update links" button.
  */
 export async function updateIfInstalledHere(): Promise<{ updated: boolean; output?: string }> {
   if (!existsSync(configFile()) || isSynced()) return { updated: false }
   const config = await readConfig()
   if (!config || path.resolve(config.paths.package) !== path.resolve(homeDir())) return { updated: false }
   const node = await findNode()
+  if (!node) return { updated: false }
   syncPackage()
-  const result = await init(node, [])
+  const result = await run(node, [path.join(homeDir(), 'bin', 'coordinator.mjs'), 'render'], { timeout: 60000 })
   return { updated: result.ok, output: result.output }
 }
-

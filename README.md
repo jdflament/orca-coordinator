@@ -43,21 +43,29 @@ orca plugin install jdflament/orca-coordinator
 ```
 
 Orca shows what the plugin may do (it runs a small worker on your machine) and asks you to
-approve it once. The **Coordinator board** panel then opens on a setup screen: one
-**Set up in <folder>** button for your top Orca folder (**Change folder** picks another), above a
-short form (your name and the git repositories to watch; plain folders are never offered; no
-tool settings: the coordinator uses whatever ticketing and chat tools your agent has). That copies
-the package to `~/.local/share/orca-coordinator` (Orca keeps each plugin version in its own
-folder; the skill link and the wrappers need a path that does not move) and runs
-`orca-coordinator init --yes` there. Then **Start coordinator** opens your agent in that
-workspace with the coordinator skill loaded. The gear in the panel header edits your name,
-draft language and tone, and the watched git repositories later: it merges them into
-`config.yaml` (validated, read back) and re-renders. Everything else (automations, queue,
-budget, CLI adapters) is edited in `config.yaml` only.
+approve it once. The **Coordinator board** panel then opens on one setup screen:
+
+1. Your name and the git repositories to watch (plain folders are never offered).
+2. **Agents**: the ones installed on your computer. Only the agent that runs the coordinator is
+   ticked; tick any other to give it the skill. Optionally tick the status line badge.
+3. The exact paths it will link or edit, listed above the **Set up in <folder>** button
+   (**Change folder** picks another). Nothing outside this plugin's own folders is written
+   before you press it.
+
+Then press **Start coordinator** in the panel: it opens your agent in that workspace with the
+coordinator skill loaded. Setup copies the package to `~/.local/share/orca-coordinator` (Orca
+keeps each plugin version in its own folder; the skill link and the wrappers need a path that
+does not move) and runs `orca-coordinator init --yes` there. The button disappears once the
+coordinator is running. The gear in the panel header edits your name, draft language and tone,
+and the watched git repositories later: it merges them into `config.yaml` (validated, read
+back) and re-renders. Everything else (automations, queue, budget, CLI adapters) is edited in
+`config.yaml` only.
 
 Updates come from Orca too: `orca plugin update --all` (or the Plugins page) installs the next
-release, and the panel brings the package and its rendered rules up to date the next time it
-starts. Your config and state are never touched by an update.
+release, and the panel refreshes the plugin's own files (the package copy, the rendered rules and
+wrappers) the next time it starts. An update never changes agent config: if a skill link points at
+an older copy, the panel shows a one-line notice with an **Update links** button. Your config and
+state are never touched by an update.
 
 The setup needs Node.js ≥ 20.6 on your PATH; the panel says so if it is missing.
 
@@ -73,8 +81,7 @@ node bin/coordinator.mjs doctor # checks node, orca, gh, jq, config, state, plug
 
 `init` detects everything it can and shows it before writing anything; Enter installs, `e`
 walks through each value. It finds: your name (`git config user.name`) and GitHub login
-(`gh`), your language (system locale) and timezone, the agent installed (`claude`, `codex`
-or `opencode`), the workspace (the Orca repo holding the clone, else the one holding the
+(`gh`), your language (system locale) and timezone, the workspace (the Orca repo holding the clone, else the one holding the
 folder you ran it from, else that folder), its repos and their GitHub owner, and Orca's
 worktree folder. Ticketing and chat are not asked: the coordinator detects them (below); flags
 start at `none`. `--yes` takes all of it without asking.
@@ -83,7 +90,7 @@ Non-interactive, all flags:
 
 ```sh
 ./setup.sh --yes --name Alex --github alex-dev --workspace ~/code --github-org acme \
-  --worker-agent claude --coordinator-agent claude --flags none --automations
+  --flags none --automations   # agents come from Orca; --worker-agent/--coordinator-agent only to pin one
 ```
 
 (Advanced, for the shell prechecks only: `--ticketing <kind> --ticketing-team --issue-url --chat <kind>`
@@ -98,8 +105,10 @@ What `init` does, in order: writes `~/.config/orca-coordinator/config.yaml`
 (+ `rules.local.md`, `playbooks.local/`), creates `~/.local/state/orca-coordinator/`
 (`state.md`, `board.json`, `lessons.md`, `reports/`, `archive/`, `bin/` wrappers),
 renders `COORDINATOR.md` and `playbooks/` from your config, links
-`skill/coordinator` into every agent skills folder it finds (`~/.claude/skills`,
-`~/.config/opencode/skills`, `~/.agents/skills`; Codex gets a paste hint), installs the
+`skill/coordinator` into the agents you pick (`--skill-agent claude|opencode|agents`,
+repeatable: `~/.claude/skills`, `~/.config/opencode/skills`, `~/.agents/skills`; default: the
+coordinator's own agent, which the plugin takes from what Orca reports; `--no-skill-link` links none; Codex gets a paste hint), edits
+`~/.claude/settings.json` (`statusLine`, backup kept) only with `--statusline`, installs the
 panel through Orca's plugin installer (`orca plugin install <clone>`; it leaves alone a panel
 Orca installed from GitHub) and opens it, and, when `automations.enabled` is true or
 `--automations` is given, registers the scheduled jobs.
@@ -117,7 +126,7 @@ can use).
 | --- | -------------- |
 | `person.name`, `github`, `language`, `tone`, `uiTermsLanguage`, `voiceFile` | how the coordinator addresses you, how drafts and review comments are written |
 | `paths.package`, `state`, `workspace`, `worktreeRoot`, `orca` | where the package, the runtime state, your Orca workspace, Orca's worktrees and the Orca CLI are |
-| `agents.coordinator.agent`, `agents.worker.{agent,model,extraArgs,permissionsFile}`, `agents.automation.provider` | which agent runs each role; the worker agent is a plain config value |
+| `agents.coordinator.agent`, `agents.worker.{agent,model,extraArgs,permissionsFile}`, `agents.automation.provider` | which agent runs each role; empty (the default) = the agent Orca reports for the coordinator's terminal, no agent is assumed |
 | `agents.coordinator.statusline` | install the ◆ COORDINATOR / WORKER status-line badge (see below) |
 | `git.branchPattern`, `prTitlePattern`, `protectedBranches` | branch names for ticket worktrees (`{github}`, `{ticket}`, `{ticket-lower}`), PR titles, branches never pushed to |
 | `repos[]` | name, path and base branch of the git repositories the coordinator works in (init fills it from `orca repo list`; plain folders are ignored), and optionally (advanced) the repo's own `ticketing` / `chat` CLI adapter block |

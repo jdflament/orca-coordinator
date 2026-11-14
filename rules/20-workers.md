@@ -1,6 +1,6 @@
 ## Workers
 
-- Start: `{{paths.orca}} orchestration worker-start --agent {{agents.worker.agent}} {{agents.worker.extraArgs}} --task-title "<short>" --spec "<spec>" ...`. Workers run on `{{agents.worker.agent}}`; the model comes from config (`agents.worker.model`, empty = the agent's default).
+- Start: `{{paths.orca}} orchestration worker-start --agent <agent> {{agents.worker.extraArgs}} --task-title "<short>" --spec "<spec>" ...`. `<agent>` is `{{agents.worker.agent}}` when that is set, otherwise the agent you run as (the `agentIdentity` Orca shows for your own terminal, `orca terminal show`); no agent is assumed. the model comes from config (`agents.worker.model`, empty = the agent's default).
 - Placement: you sit at the workspace root for context; every worker runs in the repo it works on. Read-only jobs (reviews, triage, investigation) and small edits in an existing checkout: `--worktree path:<repo path>`. They close on their own. `--worktree current` only for a job that spans several repos.
 - Ticket implementation: `--worktree new-top-level --repo id:<repoId> --name "<branch>"` with the branch from `git.branchPattern` (`{{git.branchPattern}}`, e.g. `{{git.branchExample}}`); spec = the agreed plan plus {{person.name}}'s global agent rules. These stay open; release them once the PR is merged (`orchestration worker-release --dispatch <id>`).
 - Fix or follow-up on an existing worker: `orchestration send --to dispatch:<id>`, never a new worker. A closed worker reopens on `send`.

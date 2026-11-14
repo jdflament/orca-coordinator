@@ -128,6 +128,10 @@ export interface BoardView extends Board {
   /** Derived per configured repo; a row a board task already covers (same repo and branch) is left out. */
   localWork: LocalWork[]
   coordinatorLive: boolean
+  /** Set up and not running: the only state in which the panel shows "Start coordinator". */
+  canStart: boolean
+  /** Skill links that point at another copy of the package: the panel offers "Update links". */
+  staleLinks: string[]
   repoColors: Record<string, string>
   oncallLabel: string
 }
@@ -158,6 +162,21 @@ export interface SetupStatus {
   repos: SetupRepo[]
   /** git config user.name, to prefill the name. */
   personName: string
+  /** The agent kinds Orca reports (agents.list); only the coordinator's own is selected. Empty when Orca reports none. */
+  agents: SetupAgent[]
+  coordinatorAgent: string
+  /** The settings file the optional status line badge edits, for the coordinator's agent (empty path: not offered). */
+  statusLine: { path: string; available: boolean }
+  /** The plugin's own folders setup writes (shown with the paths it links or edits). */
+  ownPaths: string[]
+}
+
+/** An agent kind Orca reports: path is the exact link setup would create ('' = no skills folder known, nothing to link). */
+export interface SetupAgent {
+  id: string
+  name: string
+  path: string
+  selected: boolean
 }
 
 /** The setup form. Fields left out keep init's detection; repos: [] watches none. */
@@ -165,6 +184,14 @@ export interface SetupOptions {
   workspace: string
   name?: string
   repos?: string[]
+  /** Agent ids whose skills folder gets the link; none given = none linked. */
+  agents?: string[]
+  /** The agent kind (from Orca's report) the coordinator runs as; sent to init as the coordinator agent. */
+  coordinatorAgent?: string
+  /** Edit statusLine in the settings file status shows (the ◆ COORDINATOR badge). */
+  statusLine?: boolean
+  /** The user pressed the button on the screen that showed the paths; without it nothing is written. */
+  confirmed?: boolean
 }
 
 export interface ConfigRepo {
@@ -179,7 +206,7 @@ export interface ConfigRepo {
 export interface CoordinatorSettings {
   person: { name: string; language: string; tone: string; [key: string]: unknown }
   paths: { package: string; workspace: string; state: string; [key: string]: unknown }
-  agents: { coordinator: { agent: string; [key: string]: unknown }; [key: string]: unknown }
+  agents: { coordinator: { agent: string; [key: string]: unknown }; worker: { agent: string; [key: string]: unknown }; [key: string]: unknown }
   repos: ConfigRepo[]
   /** Everything else (adapters, queue, budget, automations…) is config.yaml-only: the panel never reads or edits it. */
   [key: string]: unknown
@@ -243,10 +270,13 @@ declare module 'orca' {
     /** Brings a terminal to the front (the coordinator's when none is given). */
     'board.switch': { input: { terminal?: string }; output: { switched: boolean } }
     'setup.status': { output: SetupStatus }
-    /** Checks the form, copies the package to its stable home and runs init with the answers. */
+    /** Needs confirmed: true. Copies the package to its stable home and runs init with the answers: links only the chosen agents. */
     'setup.run': { input: SetupOptions; output: { ok: boolean; output: string } }
     /** Starts the coordinator agent in the configured workspace, in a terminal, focused. */
-    'setup.start': { output: { started: boolean; output: string } }
+    /** agent: the kind the user picked from what Orca reports; choices: asked back when Orca reports several and none was picked. */
+    'setup.start': { input: { agent?: string }; output: { started: boolean; output: string; choices?: string[] } }
+    /** Re-points existing skill links that are stale; creates no new link and edits no settings. */
+    'setup.updateLinks': { output: { updated: string[] } }
     /** The user's config.yaml, merged with defaults, plus its problems and the choices. */
     'config.read': { output: ConfigRead }
     /** Removes one repos entry that is not a git repository from config.yaml (read back to check), then renders. */
