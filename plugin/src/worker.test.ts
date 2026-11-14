@@ -957,6 +957,8 @@ test('board.get canStart: Start coordinator shows only when set up and not runni
       assert.equal((await worker.request('board.get')).canStart, true, 'set up, stopped')
       await worker.deactivate()
     })
+    mkdirSync(join(home, '.local/state/orca-coordinator'), { recursive: true })
+    writeFileSync(join(home, '.local/state/orca-coordinator/coordinator-terminal'), 'term_coord\n')
     await withFakeOrca(true, async () => {
       const worker = await mount(home)
       assert.equal((await worker.request('board.get')).canStart, false, 'running')
