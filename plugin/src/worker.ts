@@ -274,7 +274,7 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
     canStart: config !== null && !coordinatorLive,
     staleLinks: config ? await staleSkillLinks() : [],
     repoColors: panel.repoColors ?? {},
-    oncallLabel: panel.oncallLabel ?? 'oncall'
+    oncallLabel: panel.oncallLabel ?? ''
   }
   markNew(view, seen)
   return view

@@ -23,20 +23,20 @@ runtime state). `cfg.x` names a key in `config.yaml`.
 | Decision = action badge + imperative button, Skip / Explain, drafts as decisions | `rules/60-board.md`, `plugin/panel/index.html` | — | — |
 | Board agents: live Orca workers from `worker-list`; `B agent:set` only for agents Orca does not report | `rules/60-board.md`, `bin/board.mjs` | — | — |
 | Panel clicks: `terminal send "<option> <id>"` to the live coordinator; `inbox.jsonl` fallback when it is offline | `plugin/src/worker.ts`, `bin/board.mjs inbox` | — | plugin setting `coordinatorDir` |
-| Oncall badge | panel, schema, `board.mjs --oncall` | — | `board.oncallLabel` |
+| Priority badge (`oncall` field) | panel, schema, `board.mjs --oncall` | — | `board.oncallLabel` |
 | Cleanup script (zero model) + panel ⋯ menu item: dry-run preview, then Confirm, then a feedback line | `bin/cleanup.sh` (`-n`), plugin handler `board.cleanup` | — | `paths.worktreeRoot` |
 | Status line ◆ COORDINATOR / WORKER (WORKER read from the plugin's own `<state>/worker-terminals`) | `bin/statusline.sh` | `~/.claude/settings.json` by `init --statusline` or `orca-coordinator statusline`; previous command in `<state>/statusline-chain` | `agents.coordinator.statusline` |
 | Worker self-identification footer in every spec, ◆ tab title | `rules/10-session.md`, `playbooks/_preamble.md` | — | `person.name` |
-| Drafts: the human's language and tone, UI terms kept, never post, no "I recommend" in text they post, ≤2 proof links | `rules/40-decisions.md` | `person.voiceFile` | `person.*` |
-| Planning: every named repo, show cuts, one ticket per repo per feature, 5-line plan | `rules/50-planning-tracker.md` | — | `git.*` |
-| Tracker and GitHub in sync in the same step (PR attached, status follows PR, one child per repo, design decisions as a parent comment) | `rules/50-planning-tracker.md` | — | `adapters.ticketing.*` |
-| Chat draft-only fallback (channels the bot cannot post in) | `rules/40-decisions.md`, `adapters/chat/*.sh` | — | `adapters.chat.draftOnlyChannels[]` |
+| Optional rule `drafts`: the human's language and tone (both optional), UI terms kept, never post, no "I recommend" in text they post, ≤2 proof links | `rules/optional/drafts.md` | `person.voiceFile` | `person.*` |
+| Optional rules `planning-tracker` (every named repo, show cuts, one ticket per repo per feature) and `five-line-plan` | `rules/optional/planning-tracker.md`, `rules/optional/five-line-plan.md` | — | `rules.optional`, `git.*` |
+| Optional rule `planning-tracker`: tracker and GitHub in sync in the same step (PR attached, status follows PR, one child per repo, design decisions as a parent comment) | `rules/optional/planning-tracker.md` | — | `adapters.ticketing.*` |
+| Chat draft-only fallback (channels the bot cannot post in; part of the `drafts` rule) | `rules/optional/drafts.md`, `adapters/chat/*.sh` | — | `adapters.chat.draftOnlyChannels[]` |
 | Ticketing CLI adapter for prechecks (Linear, Jira, GitHub issues, none), per repo | `adapters/ticketing/`, `bin/lib/adapters.mjs` | — | `adapters.ticketing.*`, `repos[].ticketing` |
 | Chat CLI adapter for prechecks (Slack, none), per repo | `adapters/chat/`, `bin/lib/adapters.mjs` | — | `adapters.chat.*`, `repos[].chat` |
 | Flags (Unleash, none) | `adapters/flags/` | credential in keychain/env/file | `adapters.flags.*` |
 | Playbooks (pr-comments, pr-review, ticket-triage, cleanup, eval-weekly, playbook-regression) | `playbooks/*.md` templates | `playbooks.local/` overrides, rendered copies in `<state>/playbooks/` | all placeholders |
 | Panel UI: live workers, "Needs you" cards, coordinator-live dot, Clean up (⋯ menu), jump to coordinator, local git work per repo (opens Source Control) | `plugin/` | — | plugin settings |
-| Panel settings (gear): name, draft language and tone, watched git repositories; nothing else | `plugin/src/setup.ts` (`config.read`, `config.save`, `config.removeRepo`), `coordinator.mjs config --merge` | `config.yaml` | `person.*`, `repos[]` |
+| Panel settings (gear): name, writing language and style, watched git repositories; nothing else | `plugin/src/setup.ts` (`config.read`, `config.save`, `config.removeRepo`), `coordinator.mjs config --merge` | `config.yaml` | `person.*`, `repos[]` |
 | Repos are git repositories only: a plain folder in `repos[]` is a warning, skipped everywhere, offered for removal in settings | `bin/lib/config.mjs` (`isGitRepo`), `plugin/src/setup.ts` | `config.yaml` | `repos[]` |
 | Tools detected, not configured: names recorded with `coordinator tools --set`, per-repo hint in `state.md`; CLI adapters only for the shell prechecks | `rules/00-role.md`, `rules/10-session.md`, `bin/coordinator.mjs tools` | `<state>/panel.json` (`tools`), `state.md` | `adapters.*`, `repos[].ticketing` / `chat` (optional) |
 | Personal rules (team labels, review prefixes, voice) | — | `rules.local.md`, `config.yaml` | — |

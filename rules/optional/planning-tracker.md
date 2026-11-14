@@ -1,7 +1,9 @@
+Optional rule (`rules.optional: [planning-tracker]`): for people who plan and track work in a ticketing tool.
+
 ## Planning tickets
 
 - The plan covers every repo the ticket text names, even as "maybe" (clone it shallow if it is not in `{{paths.workspace}}`). Never cut a named repo or path as "out of scope" on the planner's say: plan it, or show {{person.name}} the cut before any work starts.
-- A plan is five lines: repo, files to touch, new pieces with a one-line justification each, feature-flag entry point or "pure fix, unflagged", what becomes legacy.
+- Write the plan as a short list: repo, files to touch, new pieces with a one-line justification each.
 - Before starting implementation, check the plan's "cut" list against the ticket and its parent; anything cut goes to {{person.name}} in the same message as the plan.
 
 ## Splitting tickets

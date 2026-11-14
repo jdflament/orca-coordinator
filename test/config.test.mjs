@@ -138,3 +138,28 @@ test('rules: workers and readers get their own level\'s model, the coordinator\'
   const session = render(fs.readFileSync(new URL('../rules/10-session.md', import.meta.url), 'utf8'), templateValues(defaults()))
   assert.match(session, /level in `models.levels`[^\n]*is empty, fill it[^\n]*Never overwrite a non-empty level/)
 })
+
+// ---- generic defaults ----
+
+test('defaults and the example config carry no personal names, voice or team labels', () => {
+  const d = defaults()
+  assert.equal(d.person.language, '')
+  assert.equal(d.person.tone, '')
+  assert.equal(d.board.oncallLabel, '')
+  assert.equal(d.rules, undefined, 'a missing key means all optional rules, for existing installs')
+  const text = JSON.stringify(d) + fs.readFileSync(path.join(ROOT, 'config.example.yaml'), 'utf8')
+  assert.doesNotMatch(text, /Alex|alex-dev|\bacme\b|\bPAY\b|payments-incidents|benkyoji|plain, 2-4 sentences|Teammates|oncall(Label)?: oncall/)
+  const example = parseYaml(fs.readFileSync(path.join(ROOT, 'config.example.yaml'), 'utf8'))
+  assert.deepEqual(example.rules, { optional: [] })
+  assert.equal(example.board.oncallLabel, '')
+})
+
+test('fixtures and panel copy are neutral: DEMO ids, example-org, no "draft" or "tickets" wording', () => {
+  const fixture = fs.readFileSync(path.join(ROOT, 'plugin', 'src', 'fixtures', 'busy.json'), 'utf8')
+  assert.doesNotMatch(fixture, /PROJ-|acme|checkout|support confirms/i)
+  assert.match(fixture, /DEMO-1\d\d/)
+  const panel = fs.readFileSync(path.join(ROOT, 'plugin', 'panel', 'index.html'), 'utf8')
+  const copy = panel
+  assert.doesNotMatch(copy, /draft/i)
+  assert.doesNotMatch(copy, /adds tickets/)
+})
