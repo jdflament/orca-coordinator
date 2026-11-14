@@ -68,35 +68,46 @@ for (const tag of TAGS) {
     assert.equal(config.person.name, 'Alex')
     assert.equal(config.schemaVersion, CONFIG_VERSION)
     assert.equal(config.myTeamNotes?.keep, true, 'unknown keys survive the read')
-    // rules.optional was implicit (missing = all on); the migration writes it out, so the install keeps every optional rule it had.
-    assert.deepEqual(config.rules.optional, OPTIONAL_RULES_AT_V2)
-    assert.ok(OPTIONAL_RULES_AT_V2.every((name) => availableOptionalRules().includes(name)))
-    assert.deepEqual([...enabledOptionalRules(config)].sort(), availableOptionalRules(), 'same rules on as before the migration')
+    const stored = Number(/^schemaVersion:\s*(\d+)/m.exec(original)?.[1] ?? 0)
+    const migrates = stored < CONFIG_VERSION
+    if (migrates) {
+      // rules.optional was implicit (missing = all on); the migration writes it out, so the install keeps every optional rule it had.
+      assert.deepEqual(config.rules.optional, OPTIONAL_RULES_AT_V2)
+      assert.ok(OPTIONAL_RULES_AT_V2.every((name) => availableOptionalRules().includes(name)))
+      assert.deepEqual([...enabledOptionalRules(config)].sort(), availableOptionalRules(), 'same rules on as before the migration')
+    } else {
+      // Already current: the stored rules.optional is the user's choice and is kept as written.
+      const listed = /^\s*optional:\s*\[([^\]]*)\]/m.exec(original)
+      assert.ok(listed, 'the fixture stores rules.optional as an inline list')
+      assert.deepEqual(config.rules.optional, listed[1].split(',').map((name) => name.trim()).filter(Boolean))
+    }
     const migrated = read(box.configPath)
     assert.match(migrated, new RegExp(`^schemaVersion: ${CONFIG_VERSION}$`, 'm'))
     assert.ok(migrated.includes('myTeamNotes:\n  keep: true'), 'unknown keys survive the rewrite')
     assert.ok(migrated.startsWith('# orca-coordinator config'), 'the leading comment stays first')
-    const backup = `${box.configPath}.bak-v0`
-    assert.equal(read(backup), original, 'the backup is the original, byte for byte')
+    const backup = `${box.configPath}.bak-v${stored}`
+    if (migrates) assert.equal(read(backup), original, 'the backup is the original, byte for byte')
+    else assert.equal(migrated, original, 'a current-version config is never rewritten by a read')
     // Idempotent: again (CLI, migrate command, a write) changes nothing and never replaces the backup.
     assert.equal(box.run(COORDINATOR, ['config', '--json']).status, 0)
     const again = box.run(COORDINATOR, ['migrate', '--json'])
     assert.equal(again.status, 0, again.err)
     assert.deepEqual(JSON.parse(again.out).config.migrated, false)
     assert.equal(read(box.configPath), migrated)
-    assert.equal(read(backup), original)
+    if (migrates) assert.equal(read(backup), original)
     const saved = box.run(COORDINATOR, ['config', '--merge', JSON.stringify({ queue: { max: 4 } })])
     assert.equal(saved.status, 0, saved.err)
     const merged = read(box.configPath)
     assert.ok(merged.includes('myTeamNotes:') && merged.includes('max: 4') && new RegExp(`^schemaVersion: ${CONFIG_VERSION}$`, 'm').test(merged), 'a save keeps unknown keys and the version')
-    assert.deepEqual(fs.readdirSync(path.dirname(box.configPath)).filter((f) => f.includes('.bak')), ['config.yaml.bak-v0'], 'one backup only')
+    assert.deepEqual(fs.readdirSync(path.dirname(box.configPath)).filter((f) => f.includes('.bak')), migrates ? [`config.yaml.bak-v${stored}`] : [], 'one backup only')
   })
 
   test(`upgrade from ${tag}: migrate command and render work on the old state, and never rewrite the config`, () => {
     const { box, stateDir, read } = install(tag)
+    const stored = Number(/^schemaVersion:\s*(\d+)/m.exec(read(box.configPath))?.[1] ?? 0)
     const first = box.run(COORDINATOR, ['migrate'])
     assert.equal(first.status, 0, first.err)
-    assert.match(first.out, /config: migrated v0 → v2/)
+    assert.match(first.out, stored < CONFIG_VERSION ? new RegExp(`config: migrated v${stored} → v${CONFIG_VERSION}`) : /config: up to date/)
     assert.match(first.out, /board: up to date/)
     const second = box.run(COORDINATOR, ['migrate'])
     assert.match(second.out, /config: up to date/)
