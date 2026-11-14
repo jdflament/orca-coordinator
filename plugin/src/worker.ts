@@ -225,9 +225,29 @@ function withLinkHosts<T extends { url?: string }>(items: T[] | undefined): T[] 
   })
 }
 
+const BOARD_LISTS = ['instructions', 'decisions', 'workstreams', 'tasks', 'repos', 'agents', 'log'] as const
+
+/**
+ * board.json as the panel can show it, whatever wrote it: not an object reads as an empty board, a
+ * list of the wrong type reads as missing, a list item that is not an object is dropped, a wrong-typed
+ * focus is dropped. Unknown keys pass through untouched; nothing is written back.
+ */
+export function sanitizeBoard(raw: unknown): Board {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { version: 2 }
+  const board = { ...(raw as Record<string, unknown>) }
+  for (const key of BOARD_LISTS) {
+    if (!(key in board)) continue
+    if (Array.isArray(board[key])) board[key] = (board[key] as unknown[]).filter((item) => item && typeof item === 'object')
+    else delete board[key]
+  }
+  if ('focus' in board && typeof board.focus !== 'string') delete board.focus
+  if ('updatedAt' in board && typeof board.updatedAt !== 'string') delete board.updatedAt
+  return board as unknown as Board
+}
+
 async function getBoard(): Promise<BoardView> {
   const dir = await stateDir()
-  const board = await readJson<Board>(path.join(dir, 'board.json'), { version: 2 })
+  const board = sanitizeBoard(await readJson<unknown>(path.join(dir, 'board.json'), null))
   const read = await readJson<PanelJson>(path.join(dir, 'panel.json'), {})
   const panel: PanelJson = read && typeof read === 'object' ? read : {}
   const handle = await getCoordinatorHandle().catch(() => '')
@@ -389,7 +409,7 @@ async function openWorkspaceBoard(): Promise<{ opened: boolean; error?: string }
 export default function activate(orca: OrcaWorkerApi): void {
   settings = orca.settings
   host = orca.host
-  // Orca installed a new version of the plugin: refresh the plugin's own files (never agent config).
+  // Orca installed a new version of the plugin: migrate stored data, then refresh the plugin's own files (never agent config, never setup).
   void updateIfInstalledHere().catch(() => undefined)
 
   orca.panels.handle('setup.status', async () => getSetupStatus(runOrca, host, await getCoordinatorHandle().catch(() => '')))

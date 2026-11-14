@@ -446,12 +446,24 @@ export async function removeSkippedRepo(target: string): Promise<ConfigSave> {
   return result
 }
 
+/** `coordinator.mjs migrate` of this plugin's package, on the user's node; a failure is reported, never thrown (the panel reads old data as it is). */
+export async function migrateStored(): Promise<{ ok: boolean; output: string }> {
+  if (!existsSync(configFile())) return { ok: true, output: 'no config: nothing to migrate' }
+  const node = await findNode()
+  if (!node) return { ok: false, output: NO_NODE }
+  const result = await run(node, [path.join(PACKAGE_DIR, 'bin', 'coordinator.mjs'), 'migrate'], { timeout: 60000 })
+  return { ok: result.ok, output: result.output }
+}
+
 /**
  * After Orca updates the plugin: refresh the plugin's own files only (the stable home, then the
  * rendered rules and wrappers), and only for a setup this plugin made. Agent links and settings are
  * never written here: stale links are shown in the panel with an "Update links" button.
  */
 export async function updateIfInstalledHere(): Promise<{ updated: boolean; output?: string }> {
+  // Stored data first, whether or not the home is stale: this plugin's own CLI migrates config.yaml and
+  // board.json (backup once, idempotent). Migrations are the only thing that ever rewrites the user's config here.
+  await migrateStored()
   if (!existsSync(configFile()) || isSynced()) return { updated: false }
   const config = await readConfig()
   if (!config || path.resolve(config.paths.package) !== path.resolve(homeDir())) return { updated: false }

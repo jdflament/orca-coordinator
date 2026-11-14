@@ -1,0 +1,117 @@
+{
+  "version": 2,
+  "focus": "Ship the checkout rework",
+  "updatedAt": "2026-11-14T03:21:28.282Z",
+  "seq": {
+    "decision": 1,
+    "instruction": 1
+  },
+  "instructions": [
+    {
+      "id": "i1",
+      "text": "Never push without asking",
+      "status": "active",
+      "createdAt": "2026-11-14T03:21:28.162Z"
+    }
+  ],
+  "decisions": [
+    {
+      "id": 1,
+      "title": "Merge PR 12?",
+      "repo": "api",
+      "url": "",
+      "action": "Decide",
+      "context": "",
+      "options": [
+        {
+          "id": "merge",
+          "label": "Merge",
+          "recommended": true
+        },
+        {
+          "id": "hold",
+          "label": "Hold"
+        }
+      ],
+      "status": "pending",
+      "createdAt": "2026-11-14T03:21:28.222Z"
+    }
+  ],
+  "workstreams": [
+    {
+      "id": "PROJ-1",
+      "title": "Checkout rework",
+      "url": "",
+      "status": "active",
+      "progress": 40,
+      "notes": ""
+    }
+  ],
+  "tasks": [
+    {
+      "id": "PROJ-2",
+      "ws": "PROJ-1",
+      "repo": "api",
+      "status": "pr",
+      "url": "",
+      "detail": "review requested",
+      "pr": 12
+    }
+  ],
+  "repos": [
+    {
+      "id": "PROJ-3",
+      "name": "api",
+      "kind": "pr",
+      "repo": "",
+      "status": "review",
+      "detail": "",
+      "url": ""
+    }
+  ],
+  "agents": [
+    {
+      "id": "worker-1",
+      "name": "worker-1",
+      "role": "worker",
+      "state": "working",
+      "detail": "writing tests",
+      "updatedAt": "2026-11-14T03:21:28.100Z",
+      "repo": "api"
+    }
+  ],
+  "log": [
+    {
+      "at": "2026-11-14T03:21:27.863Z",
+      "text": "focus set: Ship the checkout rework"
+    },
+    {
+      "at": "2026-11-14T03:21:27.919Z",
+      "text": "workstream added: Checkout rework"
+    },
+    {
+      "at": "2026-11-14T03:21:27.977Z",
+      "text": "task added: PROJ-2 (api)"
+    },
+    {
+      "at": "2026-11-14T03:21:28.038Z",
+      "text": "repo added: api (pr, review)"
+    },
+    {
+      "at": "2026-11-14T03:21:28.100Z",
+      "text": "agent worker-1 → working"
+    },
+    {
+      "at": "2026-11-14T03:21:28.162Z",
+      "text": "instruction added: Never push without asking"
+    },
+    {
+      "at": "2026-11-14T03:21:28.222Z",
+      "text": "decision 1 raised: Merge PR 12? (Decide)"
+    },
+    {
+      "at": "2026-11-14T03:21:28.282Z",
+      "text": "fixture built"
+    }
+  ]
+}

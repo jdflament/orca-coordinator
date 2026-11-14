@@ -8,6 +8,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { REPO_ADAPTERS } from './adapters.mjs'
+import { CONFIG_VERSION, migrateConfigFile } from './migrate.mjs'
 import { validateAgainst } from './validate.mjs'
 import { parseYaml, toYaml } from './yaml.mjs'
 
@@ -48,6 +49,7 @@ const DEFAULT_AUTOMATIONS = [
 
 export function defaults() {
   return {
+    schemaVersion: CONFIG_VERSION,
     person: { name: 'you', github: '', language: '', tone: '', uiTermsLanguage: 'en', voiceFile: null },
     paths: {
       package: PACKAGE_ROOT,
@@ -113,6 +115,8 @@ export function loadConfig({ configPath = defaultConfigPath(), cwd = process.cwd
   let config = defaults()
   const sources = []
   if (fs.existsSync(configPath)) {
+    // An older config is migrated first (backup once); a failed migration is not an error: the file is read as it is.
+    migrateConfigFile(configPath)
     config = deepMerge(config, readYamlFile(configPath) || {})
     sources.push(configPath)
   } else if (strict) {

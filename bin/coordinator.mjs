@@ -41,6 +41,7 @@ import {
   toYaml,
   validate
 } from './lib/config.mjs'
+import { migrateAll, migrateConfigFile } from './lib/migrate.mjs'
 import { adapterFor, adapterTargets, currentRepo, findRepo, REPO_ADAPTERS } from './lib/adapters.mjs'
 
 const argv = process.argv.slice(2)
@@ -450,6 +451,7 @@ function configMerge(configPath, json) {
   }
   if (!patch || typeof patch !== 'object' || Array.isArray(patch)) throw new Error('--merge expects a JSON object')
   if (!fs.existsSync(configPath)) throw new Error(`no config at ${configPath}: run "orca-coordinator init" first`)
+  migrateConfigFile(configPath)
   const original = fs.readFileSync(configPath, 'utf8')
   if (Array.isArray(patch.repos)) {
     const notGit = patch.repos.filter((r) => !r || typeof r !== 'object' || !isGitRepo(expandHome(String(r.path || ''))))
@@ -987,6 +989,7 @@ function usage() {
   automations  install | remove | list
   plugin       load | open | unload
   uninstall    remove automations, plugin, skill links, wrappers (--purge: also config and state)
+  migrate      bring config.yaml and board.json up to this version (backup once, idempotent; --json)
   paths        print the folders this install uses`)
 }
 
@@ -1011,6 +1014,17 @@ async function main() {
       if (has('keys')) return console.log(Object.keys(templateValues(config)).sort().join('\n'))
       if (has('json')) return console.log(JSON.stringify(config, null, 2))
       console.log(`# sources: ${sources.join(', ') || 'defaults only'}\n${toYaml(configForFile(config))}`)
+      return
+    }
+    case 'migrate': {
+      // Brings config.yaml and board.json up to this version (backup once, idempotent). The plugin runs this on update instead of init.
+      const configPath = defaultConfigPath()
+      const configResult = migrateConfigFile(configPath) // first: loading the config would migrate it silently
+      const { config } = loadConfig({ strict: false })
+      const boardPath = process.env.COORDINATOR_BOARD || path.join(config.paths.state, 'board.json')
+      const result = { config: configResult, board: migrateAll({ configPath, boardPath }).board }
+      if (has('json')) return console.log(JSON.stringify(result))
+      for (const [name, r] of Object.entries(result)) console.log(r.error ? `${name}: not migrated (${r.error})` : r.migrated ? `${name}: migrated v${r.from} → v${r.to}, backup ${r.backup}` : `${name}: up to date`)
       return
     }
     case 'paths': {

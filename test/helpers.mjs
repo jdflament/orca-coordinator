@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { CONFIG_VERSION } from '../bin/lib/migrate.mjs'
 import { toYaml } from '../bin/lib/yaml.mjs'
 
 export const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
@@ -23,7 +24,7 @@ export function sandbox({ config = {}, writeConfig = true } = {}) {
     fs.writeFileSync(file, `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(FAKE)} ${cli} "$@"\n`)
     fs.chmodSync(file, 0o755)
   }
-  const base = { person: { name: 'Alex', github: 'alex' }, paths: { state, workspace: path.join(dir, 'ws'), orca: path.join(bin, 'orca') }, github: { org: 'acme' } }
+  const base = { schemaVersion: CONFIG_VERSION, person: { name: 'Alex', github: 'alex' }, paths: { state, workspace: path.join(dir, 'ws'), orca: path.join(bin, 'orca') }, github: { org: 'acme' } }
   const env = {
     PATH: `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin:/usr/sbin:/sbin`,
     HOME: home,
@@ -51,7 +52,8 @@ export function sandbox({ config = {}, writeConfig = true } = {}) {
     },
     writeConfig(value) {
       fs.mkdirSync(path.dirname(configPath), { recursive: true })
-      fs.writeFileSync(configPath, toYaml(value))
+      // A current install carries its schema version; a test of the older shapes writes its own file.
+      fs.writeFileSync(configPath, toYaml({ schemaVersion: CONFIG_VERSION, ...value }))
     },
     run(file, args = [], { input, extraEnv = {} } = {}) {
       const isNode = file.endsWith('.mjs')

@@ -3,6 +3,8 @@
 # its root to override keys. No secrets here: credentials stay in the OS keychain
 # (secretRef: keychain:<service>), in an env var (env:NAME) or in a file (file:<path>).
 
+schemaVersion: 2                  # managed by the coordinator: migrations bump it, keep it
+
 person:
   name: <you>                      # how the coordinator addresses you
   github: <your-login>             # your GitHub login

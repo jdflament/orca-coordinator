@@ -1,0 +1,98 @@
+# orca-coordinator config (written by init on 2026-11-14). Edit freely; run "orca-coordinator render" after.
+person:
+  name: Alex
+  github: alex
+  language: en
+  tone: plain, 2-4 sentences
+  uiTermsLanguage: en
+  voiceFile: null
+paths:
+  package: __ROOT__/pkg
+  state: ~/.local/state/orca-coordinator
+  workspace: __ROOT__/ws
+  worktreeRoot: __HOME__/orca/workspaces
+  orca: /Applications/Orca.app/Contents/Resources/bin/orca
+agents:
+  coordinator:
+    agent: claude
+    statusline: false
+  worker:
+    agent: claude
+    model: null
+    extraArgs: ""
+    permissionsFile: null
+  automation:
+    provider: claude
+git:
+  branchPattern: "{github}/{ticket-lower}"
+  prTitlePattern: "{ticket}: {title}"
+  protectedBranches: [main, master, develop]
+repos: []
+github:
+  org: alex
+  reviewTeams: []
+  skipRepos: []
+  botReviewer: ""
+  requestBotReview: false
+adapters:
+  ticketing:
+    kind: none
+    via: cli
+    team: ""
+    todoStates: [Backlog, Todo, Triage]
+    childLabel: ""
+    issueUrl: ""
+  chat:
+    kind: none
+    via: mcp:slack
+    mentionIds: []
+    reviewChannels: []
+    draftOnlyChannels: []
+  flags:
+    kind: none
+    via: cli
+    uiUrl: ""
+    secretRef: ""
+    baseUrl: ""
+    project: default
+sensitive: [commit, push, pr-open, pr-merge, pr-comment, ticket-write, chat-post, db, deploy, prod, delete-branch, settings-allow-deny]
+queue:
+  max: 3
+  staleHours: 24
+budget:
+  stateBytes: 2500
+  reportHead: 2500
+  workerRetries: 1
+  maxWorkersPerTrigger: 3
+automations:
+  enabled: false
+  timezone: Asia/Tokyo
+  graceMinutes: 720
+  jobs:
+    - playbook: pr-comments
+      schedule: 0 9-19 * * 1-5
+      precheck: pr-comments
+      name: "My PRs: draft replies and fixes to review comments"
+    - playbook: pr-review
+      schedule: 15 9,12,15,18 * * 1-5
+      precheck: pr-review
+      name: "Teammates' PRs: draft my review"
+    - playbook: ticket-triage
+      schedule: 30 9 * * 1-5
+      precheck: ticket-triage
+      name: "Tickets: triage new ones and plan"
+    - playbook: cleanup
+      schedule: 0 18 * * *
+      precheck: none
+      name: "Cleanup: close idle sessions, remove merged worktrees"
+    - playbook: eval-weekly
+      schedule: 0 9 * * 1
+      precheck: eval-weekly
+      name: "Coordinator: weekly self-evaluation"
+    - playbook: playbook-regression
+      schedule: 0 10 * * 1-5
+      precheck: playbook-regression
+      name: "Coordinator: playbook regression check"
+board:
+  oncallLabel: oncall
+  repoColors: {}
