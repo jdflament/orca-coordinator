@@ -6,7 +6,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as main from './worker'
-import { listProjects, type Host } from './host'
+import { focusTerminal, hostTaskTitles, listCliTerminals, listProjects, sendToTerminal, type Host } from './host'
 import { updateIfInstalledHere } from './setup'
 import type { ConfigPatch } from './protocol'
 
@@ -44,7 +44,7 @@ function fakeOrca(bin: string, options: { live: Live; repos?: FakeRepo[]; worker
     `#!/bin/sh
 echo "$@" >> "${log}"
 case "$1 $2" in
-  "terminal list") echo '{"ok":true,"result":{"terminals":[{"handle":"term_coord","title":"◆ COORDINATOR"},{"handle":"term_w1","title":"pr-review: api#42"}]}}' ;;
+  "terminal list") echo '{"ok":true,"result":{"terminals":[{"handle":"term_coord","title":"◆ COORDINATOR","worktreeId":"ws1"},{"handle":"term_w1","title":"pr-review: api#42","worktreeId":"ws1"},{"handle":"term_w2","title":"ticket-triage: morning","worktreeId":"ws1"}]}}' ;;
   "terminal show") echo '${JSON.stringify({ ok: true, result: { terminal } })}' ;;
   "orchestration worker-list") echo '${JSON.stringify({ ok: true, result: { workers: options.workers ?? DEFAULT_WORKERS } })}' ;;
   "repo list") echo '${JSON.stringify({ ok: true, result: { repos: options.repos ?? [] } })}' ;;
@@ -1316,6 +1316,115 @@ test('board.get: a board.json with the wrong types, or that is not an object, st
       assert.equal((await worker.request('board.get')).coordinatorLive, true, junk)
     }
     assert.deepEqual(worker.refusals, [])
+    await worker.deactivate()
+  })
+})
+
+// ---- terminals: host API when offered, CLI otherwise; handle -> host terminalId mapping ----
+// The installed Orca's test host (1.4.257) does not know terminal.list/focus, so the API paths run through
+// host.ts over a fake host and a fake CLI; the handlers' CLI paths run in the tests above and below.
+
+const CLI_TERMINALS = JSON.stringify({ result: { terminals: [{ handle: 'term_coord', title: '◆ COORDINATOR', worktreeId: 'ws1' }, { handle: 'term_w1', title: 'pr-review: api#42', worktreeId: 'ws1' }, { handle: 'term_w2', title: 'ticket-triage: morning', worktreeId: 'ws1' }] } })
+const HOST_ROWS = [{ id: 'T-coord', title: '◆ COORDINATOR' }, { id: 'T-w1', title: 'pr-review: api#42' }, { id: 'T-w2', title: 'ticket-triage: morning' }]
+
+function terminalHost(methods: Record<string, (params: unknown) => unknown> = {}) {
+  const params: Record<string, unknown[]> = {}
+  const host: Host = {
+    has: (method) => method in all,
+    call: async (method, input) => {
+      ;(params[method] ??= []).push(input)
+      return all[method](input)
+    }
+  }
+  const all: Record<string, (params: unknown) => unknown> = { 'terminal.list': () => ({ terminals: HOST_ROWS, truncated: false }), 'terminal.sendText': () => ({ accepted: true }), 'terminal.focus': () => ({ focused: true }), ...methods }
+  return { host, params }
+}
+
+function terminalCli() {
+  const calls: string[][] = []
+  const cli = async (args: string[]): Promise<string> => {
+    calls.push(args)
+    return args[0] === 'terminal' && args[1] === 'list' ? CLI_TERMINALS : '{}'
+  }
+  return { cli, calls }
+}
+
+test('sendToTerminal: with terminal.sendText the handle is mapped to its host id and the CLI never types', async () => {
+  const { host, params } = terminalHost()
+  const { cli, calls } = terminalCli()
+  await sendToTerminal(host, cli, 'term_coord', 'done 1')
+  assert.deepEqual(params['terminal.list'], [{ workspaceId: 'ws1' }], 'the handle\'s workspace is listed')
+  assert.deepEqual(params['terminal.sendText'], [{ terminalId: 'T-coord', text: 'done 1', enter: true }])
+  assert.ok(!calls.some((args) => args[1] === 'send'), 'no CLI send')
+})
+
+test('sendToTerminal without terminal.sendText, or without a host, types through the CLI: text, then Enter', async () => {
+  for (const host of [null, { has: () => false, call: async () => assert.fail('no host call') } as Host]) {
+    const { cli, calls } = terminalCli()
+    await sendToTerminal(host, cli, 'term_coord', 'done 1')
+    assert.deepEqual(calls, [['terminal', 'send', '--terminal', 'term_coord', '--text', 'done 1'], ['terminal', 'send', '--terminal', 'term_coord', '--text', '', '--enter']])
+  }
+})
+
+test('sendToTerminal: a failing terminal.sendText, a refusal or a list failure is an error naming the method, with no CLI retry', async () => {
+  for (const [method, pattern] of [['terminal.sendText', /terminal\.sendText failed: terminal is gone/], ['terminal.list', /terminal\.list failed: terminal is gone/]] as const) {
+    const { host } = terminalHost({ [method]: () => { throw new Error('terminal is gone') } })
+    const { cli, calls } = terminalCli()
+    await assert.rejects(sendToTerminal(host, cli, 'term_coord', 'x'), pattern)
+    assert.ok(!calls.some((args) => args[1] === 'send'), 'the CLI does not type it a second time')
+  }
+  const { host } = terminalHost({ 'terminal.sendText': () => ({ accepted: false }) })
+  await assert.rejects(sendToTerminal(host, terminalCli().cli, 'term_coord', 'x'), /did not accept/)
+})
+
+test('id mapping: a title shared by two host terminals, an unknown handle or no title match uses the CLI, never a guessed terminal; an id equal to the handle wins', async () => {
+  const twins = terminalHost({ 'terminal.list': () => ({ terminals: [{ id: 'A', title: '◆ COORDINATOR' }, { id: 'B', title: '◆ COORDINATOR' }] }) })
+  const cli1 = terminalCli()
+  await sendToTerminal(twins.host, cli1.cli, 'term_coord', 'x')
+  assert.equal(twins.params['terminal.sendText'], undefined)
+  assert.equal(cli1.calls.filter((args) => args[1] === 'send').length, 2)
+
+  const unknown = terminalHost()
+  const cli2 = terminalCli()
+  await focusTerminal(unknown.host, cli2.cli, 'term_nope')
+  assert.equal(unknown.params['terminal.focus'], undefined)
+  assert.deepEqual(cli2.calls.at(-1), ['terminal', 'switch', '--terminal', 'term_nope'])
+
+  const same = terminalHost({ 'terminal.list': () => ({ terminals: [{ id: 'term_w1', title: 'other' }, { id: 'X', title: 'pr-review: api#42' }] }) })
+  await focusTerminal(same.host, terminalCli().cli, 'term_w1')
+  assert.deepEqual(same.params['terminal.focus'], [{ terminalId: 'term_w1' }])
+})
+
+test('focusTerminal: terminal.focus with the worker\'s own host id; the CLI switch without it; a failure names the method', async () => {
+  const { host, params } = terminalHost()
+  const { cli, calls } = terminalCli()
+  await focusTerminal(host, cli, 'term_w1')
+  assert.deepEqual(params['terminal.focus'], [{ terminalId: 'T-w1' }])
+  assert.ok(!calls.some((args) => args[1] === 'switch'))
+
+  const old = terminalCli()
+  await focusTerminal(null, old.cli, 'term_w1')
+  assert.deepEqual(old.calls, [['terminal', 'switch', '--terminal', 'term_w1']])
+
+  const failing = terminalHost({ 'terminal.focus': () => { throw new Error('desktop only') } })
+  await assert.rejects(focusTerminal(failing.host, terminalCli().cli, 'term_w1'), /terminal\.focus failed: desktop only/)
+})
+
+test('hostTaskTitles: agents.list task.title is keyed by the worker handle; agents without a task, and no agents.list, give nothing', async () => {
+  const agents = [{ terminalId: 'T-w1', task: { title: 'Review api#42' } }, { terminalId: 'T-w2', task: null }]
+  const { host } = terminalHost({ 'agents.list': () => ({ agents }) })
+  const terminals = await listCliTerminals(terminalCli().cli)
+  assert.deepEqual([...(await hostTaskTitles(host, terminals))], [['term_w1', 'Review api#42']])
+  assert.equal((await hostTaskTitles(terminalHost().host, terminals)).size, 0, 'no agents.list in this Orca')
+  const failing = terminalHost({ 'agents.list': () => { throw new Error('denied') } })
+  await assert.rejects(hostTaskTitles(failing.host, terminals), /agents\.list failed: denied/)
+})
+
+test('board.get lists worker titles from the CLI when the host API gives no task (Orca 1.4.257)', async () => {
+  await withFakeOrca(true, async () => {
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
+    const view = await worker.request('board.get')
+    assert.equal(view.workers.find((w) => w.terminal === 'term_w2')?.title, 'ticket-triage: morning')
     await worker.deactivate()
   })
 })
