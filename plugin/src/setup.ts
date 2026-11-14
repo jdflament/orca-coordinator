@@ -7,7 +7,7 @@ import { cpSync, existsSync, readFileSync, readlinkSync, realpathSync, renameSyn
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ConfigPatch, ConfigRepo, ConfigRead, ConfigSave, CoordinatorSettings, SetupAgent, SetupOptions, SetupRepo, SetupStatus, SetupWorkspace } from './protocol'
+import type { ConfigPatch, ModelChoice, ConfigRepo, ConfigRead, ConfigSave, CoordinatorSettings, SetupAgent, SetupOptions, SetupRepo, SetupStatus, SetupWorkspace } from './protocol'
 import { listProjects, listReportedAgents, type Host } from './host'
 
 /** This plugin's root: src/ → plugin/ → the package. */
@@ -327,9 +327,32 @@ function coordinatorCli(config: CoordinatorSettings | null): string {
   return own && existsSync(own) ? own : path.join(PACKAGE_DIR, 'bin', 'coordinator.mjs')
 }
 
+const NO_MODELS: ModelChoice = { models: null, tiers: null }
+
+/**
+ * The models an agent offers: the lines of `<agent> models` (a CLI argv, no shell). Null when the
+ * agent has no such command, fails or prints nothing usable: the panel then asks for free text.
+ * Tiers are picked by name (best / medium / lowest), else by position in the list.
+ */
+export async function listModels(agent: string | undefined): Promise<ModelChoice> {
+  if (!agent || !/^[\w.-]+$/.test(agent)) return NO_MODELS
+  const result = await run(agent, ['models'], { timeout: 8000 })
+  const models = result.ok ? [...new Set(lines(result.stdout).filter((line) => /^[A-Za-z0-9][\w./:@+-]*$/.test(line)))] : []
+  if (models.length === 0) return NO_MODELS
+  const find = (pattern: RegExp, fallback: number) => models.find((m) => pattern.test(m)) ?? models[fallback]
+  return {
+    models,
+    tiers: {
+      best: find(/opus|ultra|max|pro|large/i, 0),
+      medium: find(/sonnet|medium|standard/i, Math.floor(models.length / 2)),
+      lowest: find(/haiku|nano|mini|flash|lite|small/i, models.length - 1)
+    }
+  }
+}
+
 /** What the settings view shows: the merged config (defaults filled), its problems, and the choices. */
 export async function readSettings(orca: Orca, host: Host | null = null): Promise<ConfigRead> {
-  const base = { path: configFile(), skippedRepos: [] as ConfigRepo[] }
+  const base = { path: configFile(), skippedRepos: [] as ConfigRepo[], models: { coordinator: NO_MODELS, worker: NO_MODELS } }
   const repos = await listGitRepos(orca, host).catch(() => [] as SetupRepo[])
   if (!existsSync(configFile())) return { ...base, repos, config: null, problems: [`no config at ${configFile()}: set the coordinator up first`] }
   const node = await findNode()
@@ -337,9 +360,10 @@ export async function readSettings(orca: Orca, host: Host | null = null): Promis
   // Entries that are not git repositories are not problems to fix by hand: the view offers to remove each.
   const skippedRepos = await loadSkippedRepos(node)
   const strict = await loadConfigJson(node, true)
-  if (strict.config) return { ...base, repos, skippedRepos, config: strict.config, problems: [] }
-  const lenient = await loadConfigJson(node, false)
-  return { ...base, repos, skippedRepos, config: lenient.config, problems: strict.problems }
+  const lenient = strict.config ? null : await loadConfigJson(node, false)
+  const config = strict.config ?? lenient?.config ?? null
+  const models = { coordinator: await listModels(config?.agents?.coordinator?.agent), worker: await listModels(config?.agents?.worker?.agent) }
+  return { ...base, repos, skippedRepos, models, config, problems: strict.config ? [] : strict.problems }
 }
 
 /** config.yaml's repos entries that are not git repositories (`config --skipped-repos`); [] when unreadable. */
@@ -380,7 +404,7 @@ function mergeRepos(current: ConfigRepo[], form: ConfigRepo[], loaded: string[] 
 }
 
 /** The settings the panel may change; everything else (adapters, automations, queue, budget) stays config.yaml-only. */
-const EDITABLE = ['person', 'repos'] as const
+const EDITABLE = ['person', 'repos', 'agents'] as const
 
 /**
  * Merges the editable settings into config.yaml (validated by the package's CLI), then renders.

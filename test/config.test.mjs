@@ -113,3 +113,15 @@ test('release: package.json and orca-plugin.json carry the same version, and the
   assert.ok(fs.existsSync(path.join(root, plugin.main)), plugin.main)
   for (const panel of plugin.contributes.panels) assert.ok(fs.existsSync(path.join(root, panel.entry)), panel.entry)
 })
+
+test('rules: workers and readers get their own --model, and the coordinator\'s model is not the worker\'s (a --resume keeps it)', () => {
+  const config = defaults()
+  config.agents.coordinator.model = 'opus-9'
+  config.agents.worker.model = 'sonnet-9'
+  config.agents.reader.model = 'haiku-9'
+  const text = fs.readFileSync(new URL('../rules/20-workers.md', import.meta.url), 'utf8')
+  const out = render(text, templateValues(config))
+  assert.match(out, /workers[^\n]*`sonnet-9`; readers[^\n]*`haiku-9`/)
+  assert.match(out, /Your own model is `opus-9`[^\n]*`--resume` keeps it; never switch yourself to the worker model/)
+  assert.equal(defaults().agents.reader.model, null, 'unset means no --model')
+})

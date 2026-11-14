@@ -1083,6 +1083,81 @@ test('board.get canStart: Start coordinator shows only when set up and not runni
     await withFakeOrca(true, async () => {
       const worker = await mount(home)
       assert.equal((await worker.request('board.get')).canStart, false, 'running')
+
+/** A fake agent CLI on PATH: `<name> models` prints `output` (or fails when null). */
+async function withFakeAgent<T>(name: string, output: string | null, run: () => Promise<T>): Promise<T> {
+  const bin = mkdtempSync(join(tmpdir(), 'fake-agent-'))
+  writeFileSync(join(bin, name), output === null ? '#!/bin/sh\nexit 1\n' : `#!/bin/sh\n[ "$1" = models ] && printf '%s\\n' ${output}\n`)
+  chmodSync(join(bin, name), 0o755)
+  const previous = process.env.PATH
+  process.env.PATH = `${bin}:${previous}`
+  try {
+    return await run()
+  } finally {
+    process.env.PATH = previous
+  }
+}
+
+test('config.read: models come from the agent\'s own list with best / medium / lowest defaults; an unreadable list gives free text', async () => {
+  await withHome(async (home) => {
+    await withFakeOrca(false, async () => {
+      writeConfig(home)
+      const worker = await mount(home)
+      await withFakeAgent('claude', 'opus-9 sonnet-9 haiku-9', async () => {
+        const read = await worker.request('config.read')
+        assert.deepEqual(read.models.coordinator.models, ['opus-9', 'sonnet-9', 'haiku-9'])
+        assert.deepEqual(read.models.worker.tiers, { best: 'opus-9', medium: 'sonnet-9', lowest: 'haiku-9' })
+      })
+      // Tiers of an unfamiliar naming scheme fall back to list position.
+      await withFakeAgent('claude', 'm-a m-b m-c m-d', async () => {
+        assert.deepEqual((await worker.request('config.read')).models.worker.tiers, { best: 'm-a', medium: 'm-c', lowest: 'm-d' })
+      })
+      await withFakeAgent('claude', null, async () => {
+        const read = await worker.request('config.read')
+        assert.deepEqual(read.models.coordinator, { models: null, tiers: null })
+        assert.deepEqual(read.problems, [], 'an agent that cannot list models is not a config problem')
+      })
+      await worker.deactivate()
+    })
+  })
+})
+
+test('config.save: models land under agents, other agent keys and unknown keys stay, an emptied model is cleared', async () => {
+  await withHome(async (home) => {
+    await withFakeOrca(false, async () => {
+      const file = writeConfig(home, 'agents:\n  worker: {agent: claude, extraArgs: "--x", permissionsFile: ~/p.json}\n')
+      const worker = await mount(home)
+      const patch = { agents: { coordinator: { model: 'opus-9' }, worker: { model: 'sonnet-9' }, reader: { model: 'haiku-9' } } }
+      const saved = await worker.request('config.save', { patch })
+      assert.deepEqual(saved.errors, [])
+      const read = await worker.request('config.read')
+      assert.deepEqual([read.config?.agents.coordinator.model, read.config?.agents.worker?.model, read.config?.agents.reader?.model], ['opus-9', 'sonnet-9', 'haiku-9'])
+      const yaml = readFileSync(file, 'utf8')
+      assert.match(yaml, /extraArgs: --x|extraArgs: "--x"/, 'the worker\'s other keys are kept')
+      assert.match(yaml, /myTeamNotes:\n\s+keep: true/)
+      await worker.request('config.save', { patch: { agents: { worker: { model: null } } } })
+      assert.equal((await worker.request('config.read')).config?.agents.worker?.model ?? null, null)
+      assert.equal((await worker.request('config.read')).config?.agents.coordinator.model, 'opus-9', 'the other roles keep theirs')
+      await worker.deactivate()
+    })
+  })
+})
+
+test('setup.start: launches the coordinator with the coordinator model, never the worker model, and no --model when unset', async () => {
+  await withHome(async (home) => {
+    const workspace = join(home, 'work')
+    mkdirSync(workspace)
+    await withFakeOrca(false, async (log) => {
+      const file = writeConfig(home)
+      const worker = await mount(home)
+      await worker.request('setup.start')
+      assert.ok(!readFileSync(log, 'utf8').includes('--model'), 'unset: the agent\'s default')
+      await worker.request('config.save', { patch: { agents: { coordinator: { model: 'opus-9' }, worker: { model: 'sonnet-9' } } } })
+      await worker.request('setup.start')
+      const launches = readFileSync(log, 'utf8').split('\n').filter((l) => l.startsWith('agent launch'))
+      assert.match(launches[1], /--agent claude --model opus-9 --worktree/)
+      assert.ok(!launches[1].includes('sonnet-9'))
+      assert.ok(file)
       await worker.deactivate()
     })
   })

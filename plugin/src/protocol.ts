@@ -200,10 +200,21 @@ export interface ConfigRepo {
 export interface CoordinatorSettings {
   person: { name: string; language: string; tone: string; [key: string]: unknown }
   paths: { package: string; workspace: string; state: string; [key: string]: unknown }
-  agents: { coordinator: { agent: string; [key: string]: unknown }; worker: { agent: string; [key: string]: unknown }; [key: string]: unknown }
+  agents: {
+    coordinator: { agent: string; model?: string | null; [key: string]: unknown }
+    worker: { agent: string; model?: string | null; [key: string]: unknown }
+    reader?: { model?: string | null }
+    [key: string]: unknown
+  }
   repos: ConfigRepo[]
   /** Everything else (adapters, queue, budget, automations…) is config.yaml-only: the panel never reads or edits it. */
   [key: string]: unknown
+}
+
+/** The models one agent offers (`<agent> models`), null when it cannot say: the panel then shows a free-text field. tiers: best / medium / lowest of that list. */
+export interface ModelChoice {
+  models: string[] | null
+  tiers: { best: string; medium: string; lowest: string } | null
 }
 
 /** What `config.read` answers. config is null when there is no config or it cannot be read. */
@@ -216,12 +227,15 @@ export interface ConfigRead {
   repos: SetupRepo[]
   /** config.yaml repos entries that are not git repositories: ignored, offered for removal. */
   skippedRepos: ConfigRepo[]
+  /** Models of the coordinator's agent and of the workers' agent (readers use the workers'). */
+  models: { coordinator: ModelChoice; worker: ModelChoice }
 }
 
 /** What `config.save` takes: merged into config.yaml; objects merge, repos replace. Other keys (adapters, automations, queue, budget) and a repo's ticketing / chat are ignored. */
 export interface ConfigPatch {
   person?: { name?: string; language?: string; tone?: string }
   repos?: ConfigRepo[]
+  agents?: { coordinator?: { model?: string | null }; worker?: { model?: string | null }; reader?: { model?: string | null } }
   /**
    * The repo paths the form showed as watched when it was opened. Given, the save applies only
    * the form's additions and removals to config.yaml's current repos, so a form opened before

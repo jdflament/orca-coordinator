@@ -19,8 +19,9 @@ paths:
   orca: /Applications/Orca.app/Contents/Resources/bin/orca
 
 agents:
-  coordinator: {agent: claude, statusline: true}
+  coordinator: {agent: claude, model: null, statusline: true}
   worker: {agent: claude, model: null, extraArgs: "", permissionsFile: ~/.claude/settings.json}
+  reader: {model: null}   # read-only helpers (reviews, triage); runs on agents.worker.agent
   automation: {provider: claude}
 
 git:

@@ -57,8 +57,9 @@ export function defaults() {
       orca: defaultOrcaBin()
     },
     agents: {
-      coordinator: { agent: '', statusline: false },
+      coordinator: { agent: '', model: null, statusline: false },
       worker: { agent: '', model: null, extraArgs: '', permissionsFile: null },
+      reader: { model: null },
       automation: { provider: '' }
     },
     git: { branchPattern: '{github}/{ticket-lower}', prTitlePattern: '{ticket}: {title}', protectedBranches: ['main', 'master', 'develop'] },
