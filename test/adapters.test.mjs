@@ -130,7 +130,7 @@ test('coordinator tools --set: records each name once, keeps render\'s panel.jso
   let panel = JSON.parse(fs.readFileSync(file, 'utf8'))
   assert.deepEqual(panel.tools, [{ name: 'Linear', via: 'mcp' }, { name: 'GitHub', via: 'gh' }, { name: 'Slack', via: 'agent' }], 'once per name, via defaults to agent')
   assert.ok(!Number.isNaN(Date.parse(panel.detectedAt)))
-  assert.equal(panel.oncallLabel, 'oncall', 'render\'s keys are kept')
+  assert.equal(panel.oncallLabel, '', 'render\'s keys are kept (empty label by default)')
 
   assert.equal(box.run(CLI, ['render']).status, 0)
   panel = JSON.parse(fs.readFileSync(file, 'utf8'))

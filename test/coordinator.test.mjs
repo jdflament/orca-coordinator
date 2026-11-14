@@ -340,3 +340,48 @@ test('doctor finds a tool in a PATH folder with spaces and quotes, skips a non-e
   const none = box.run(CLI, ['doctor'], { extraEnv: { PATH: plain } })
   assert.match(none.out, /✗ jq: not on PATH/)
 })
+
+// ---- optional rules ----
+
+const rulesOf = (box) => fs.readFileSync(path.join(box.state, 'COORDINATOR.md'), 'utf8')
+const PLAN_MARK = 'Planning tickets'
+const FIVE_MARK = 'Plan before implementing'
+const DRAFTS_MARK = 'Drafts written for'
+
+test('render: a config without rules.optional keeps every optional rule (existing installs), [] drops them all, a list picks', () => {
+  const box = sandbox()
+  assert.equal(box.run(CLI, ['render']).status, 0)
+  for (const mark of [PLAN_MARK, FIVE_MARK, DRAFTS_MARK]) assert.ok(rulesOf(box).includes(mark), `missing key keeps "${mark}"`)
+
+  const none = sandbox({ config: { rules: { optional: [] } } })
+  assert.equal(none.run(CLI, ['render']).status, 0)
+  for (const mark of [PLAN_MARK, FIVE_MARK, DRAFTS_MARK]) assert.ok(!rulesOf(none).includes(mark), `[] drops "${mark}"`)
+  assert.ok(rulesOf(none).includes('Decide yourself'), 'core rules stay')
+  assert.ok(!/5-line|five lines|Oncall items/.test(rulesOf(none)), 'no team-process wording in the core rules')
+
+  const some = sandbox({ config: { rules: { optional: ['drafts'] } } })
+  assert.equal(some.run(CLI, ['render']).status, 0)
+  assert.ok(rulesOf(some).includes(DRAFTS_MARK))
+  assert.ok(!rulesOf(some).includes(PLAN_MARK))
+})
+
+test('render: an unknown optional rule name is rejected with the available names', () => {
+  const box = sandbox({ config: { rules: { optional: ['nope'] } } })
+  const out = box.run(CLI, ['render'])
+  assert.notEqual(out.status, 0)
+  assert.match(out.err, /unknown rule "nope".*drafts/)
+})
+
+test('init on a new machine writes rules.optional: [] (off); an existing config without the key is left alone', () => {
+  const fresh = sandbox({ writeConfig: false })
+  fresh.fake('orca', [anyOk({ repos: [], worktrees: [] })])
+  fresh.fake('gh', [{ match: [], stdout: 'alex' }])
+  assert.equal(fresh.run(CLI, [...initArgs, '--name', 'Alex']).status, 0)
+  assert.deepEqual(readConfig(fresh.configPath).rules, { optional: [] })
+
+  const old = sandbox()
+  old.fake('orca', [anyOk({ repos: [], worktrees: [] })])
+  old.fake('gh', [{ match: [], stdout: 'alex' }])
+  assert.equal(old.run(CLI, initArgs).status, 0)
+  assert.equal(readConfig(old.configPath).rules, undefined, 'no key written: all optional rules stay on')
+})

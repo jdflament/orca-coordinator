@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "focus": "PROJ-100 checkout redesign: merge api #42, then web #310",
+  "focus": "DEMO-100 demo feature: merge api #42, then web #310",
   "updatedAt": "2026-01-05T09:00:00.000Z",
   "seq": { "decision": 3, "instruction": 1 },
   "instructions": [
@@ -9,9 +9,9 @@
   "decisions": [
     {
       "id": 1,
-      "title": "PROJ-101",
+      "title": "DEMO-101",
       "repo": "api",
-      "url": "https://github.com/acme/api/pull/42",
+      "url": "https://github.com/example-org/api/pull/42",
       "action": "Merge",
       "context": "#42 green and approved. Deploy order: api, then web.",
       "options": [
@@ -23,11 +23,11 @@
     },
     {
       "id": 2,
-      "title": "PROJ-120",
+      "title": "DEMO-120",
       "repo": "api",
-      "url": "https://example.test/tickets/PROJ-120",
+      "url": "https://example.test/items/DEMO-120",
       "action": "Run SQL",
-      "context": "After support confirms: run reports/proj-120-fix.sql (dry run first).",
+      "context": "After the owner confirms: run reports/demo-120-fix.sql (dry run first).",
       "options": [
         { "id": "done", "label": "Run SQL" },
         { "id": "explain", "label": "Explain" }
@@ -37,9 +37,9 @@
     },
     {
       "id": 3,
-      "title": "PROJ-110",
+      "title": "DEMO-110",
       "repo": "web",
-      "url": "https://github.com/acme/web/pull/300",
+      "url": "https://github.com/example-org/web/pull/300",
       "action": "Get review",
       "context": "#300: ask a teammate to re-approve (threads fixed)",
       "options": [ { "id": "done", "label": "Ask review" } ],
@@ -48,23 +48,23 @@
     }
   ],
   "workstreams": [
-    { "id": "PROJ-100", "title": "Checkout redesign", "url": "https://example.test/tickets/PROJ-100", "status": "active", "progress": null, "notes": "web #310 waits for api #42" },
-    { "id": "PROJ-120", "title": "Order cancellation data fix", "url": "https://example.test/tickets/PROJ-120", "status": "ready", "progress": null, "notes": "", "oncall": true }
+    { "id": "DEMO-100", "title": "Demo feature", "url": "https://example.test/items/DEMO-100", "status": "active", "progress": null, "notes": "web #310 waits for api #42" },
+    { "id": "DEMO-120", "title": "Demo data fix", "url": "https://example.test/items/DEMO-120", "status": "ready", "progress": null, "notes": "", "oncall": true }
   ],
   "tasks": [
-    { "id": "PROJ-101", "ws": "PROJ-100", "repo": "api", "status": "pr", "pr": 42, "url": "https://github.com/acme/api/pull/42", "detail": "review/merge" },
-    { "id": "PROJ-102", "ws": "PROJ-100", "repo": "web", "status": "blocked", "pr": 310, "url": "https://github.com/acme/web/pull/310", "detail": "waits PROJ-101" },
-    { "id": "PROJ-103", "ws": "PROJ-100", "repo": "proto", "status": "merged", "pr": 77, "url": "https://github.com/acme/proto/pull/77", "detail": "merged" },
-    { "id": "PROJ-121", "ws": "PROJ-120", "repo": "api", "status": "local", "url": "https://example.test/tickets/PROJ-121", "detail": "not started", "oncall": true }
+    { "id": "DEMO-101", "ws": "DEMO-100", "repo": "api", "status": "pr", "pr": 42, "url": "https://github.com/example-org/api/pull/42", "detail": "review/merge" },
+    { "id": "DEMO-102", "ws": "DEMO-100", "repo": "web", "status": "blocked", "pr": 310, "url": "https://github.com/example-org/web/pull/310", "detail": "waits DEMO-101" },
+    { "id": "DEMO-103", "ws": "DEMO-100", "repo": "proto", "status": "merged", "pr": 77, "url": "https://github.com/example-org/proto/pull/77", "detail": "merged" },
+    { "id": "DEMO-121", "ws": "DEMO-120", "repo": "api", "status": "local", "url": "https://example.test/items/DEMO-121", "detail": "not started", "oncall": true }
   ],
   "repos": [
-    { "id": "PROJ-090", "name": "#298", "kind": "pr", "repo": "web", "status": "hold", "detail": "flag only on one tenant in prod", "url": "https://github.com/acme/web/pull/298" }
+    { "id": "DEMO-090", "name": "#298", "kind": "pr", "repo": "web", "status": "hold", "detail": "flag only on one tenant", "url": "https://github.com/example-org/web/pull/298" }
   ],
   "agents": [
     { "id": "ctx_a1", "name": "pr-review: api#42", "repo": "api", "role": "worker", "state": "working", "detail": "reviewing" }
   ],
   "log": [
     { "at": "2026-01-05T08:40:00.000Z", "text": "api #42: 3 threads fixed and resolved" },
-    { "at": "2026-01-05T08:55:00.000Z", "text": "decision 1 raised: PROJ-101 (Merge)" }
+    { "at": "2026-01-05T08:55:00.000Z", "text": "decision 1 raised: DEMO-101 (Merge)" }
   ]
 }

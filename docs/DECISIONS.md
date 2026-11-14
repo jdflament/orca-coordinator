@@ -13,7 +13,7 @@ Dated record of the choices that shaped the package. Newest last.
 
 ## 2026-11-11: make it shareable (goal of this package)
 
-Goal: carry everything the reference coordinator does, generic and agnostic (any person, ticketing tool, chat, agent), fully on Orca. Everything specific stays local and configurable.
+Goal: carry everything the reference coordinator does, generic and agnostic (any person, ticketing tool, chat, agent), fully on Orca. Everything specific stays local and configurable. Generic is true as of 2026-11-14 (see that entry); before it, defaults and rules still carried one person's workflow.
 
 Decisions:
 
@@ -22,7 +22,7 @@ Decisions:
 - **Clicks go to the coordinator terminal** as `<option> <id>` text by default; `inbox.jsonl` is only a fallback when no coordinator is live.
 - **Shared vs local layout.** Shared: `rules/`, `plugin/`, `bin/`, `prechecks/`, `adapters/`, `playbooks/`, `schema/`, `templates/`, `skill/`. Local, never committed: `config.yaml`, `rules.local.md`, `playbooks.local/`, and the runtime state (state, board, reports, lessons, metrics).
 - **Install assumes no folders.** Config at `~/.config/orca-coordinator/config.yaml` (XDG) or `$ORCA_COORDINATOR_CONFIG`; runtime state at `~/.local/state/orca-coordinator/`; optional per-project `.orca-coordinator.yaml`.
-- **`init` asks** for the few values it cannot guess: your name, draft language and tone, UI-term language, flags kind, agent per role, which Orca workspace hosts the coordinator (listed from Orca), repos (from `orca repo list`). Flags answer the same questions non-interactively.
+- **`init` asks** for the few values it cannot guess: your name, writing language and style, UI-term language, flags kind, agent per role, which Orca workspace hosts the coordinator (listed from Orca), repos (from `orca repo list`). Flags answer the same questions non-interactively.
 - **Automations are opt-in**, off by default (`automations.enabled`).
 - **Adapters** expose one interface per tool kind (`get|list|comment|create|url`, `search|draft|post`, `get|list|url|toggle`) so playbooks and rules never name a vendor CLI. Writes refuse without `--yes`.
 - **Not in the package:** company or product names, chat ids, flag URLs and credential names, repo names, ticket prefixes, team labels, review prefixes, personal rules, model choices, home paths. They live in `config.yaml` and `rules.local.md`.
@@ -42,7 +42,13 @@ Decisions:
 
 Supersedes the 2026-11-11 notes where they differ (the ticket-link template from config is gone: each board item carries its own url).
 
-- **The panel's settings are the person and the repos only.** Name, draft language and tone, and the watched repositories; written through `coordinator.mjs config --merge`, read back to check, then rendered. Automations, queue, budget and the CLI adapters stay `config.yaml`-only; a save never touches them, even when a patch names them. No per-repo ticketing or chat settings in the panel.
+- **The panel's settings are the person and the repos only.** Name, writing language and style, and the watched repositories; written through `coordinator.mjs config --merge`, read back to check, then rendered. Automations, queue, budget and the CLI adapters stay `config.yaml`-only; a save never touches them, even when a patch names them. No per-repo ticketing or chat settings in the panel.
 - **Repos are git repositories only.** A `repos[]` entry that is not the top of a git work tree (the workspace folder, a folder inside a repo, a missing path) is a warning, skipped by every consumer, never written by `init` or `config --merge`, and offered for removal in the settings view.
 - **Clean up previews first.** The ⋯ menu runs `bin/cleanup -n` (changes nothing) and shows what it would close and remove; only Confirm runs it.
 - **The status-line badge reads the plugin's own file, not Orca's database.** Orca sets no env var for dispatched workers, so the plugin worker writes the terminals of the workers Orca lists to `<state>/worker-terminals` and `bin/statusline.sh` only reads it (no `sqlite3`, no dependency on Orca's schema; Orca plugin review, issue #1). The chained previous status line runs without a shell. `orca-coordinator statusline` re-chains a replaced `statusLine`.
+
+## 2026-11-14: generic defaults, optional team-process rules
+
+- **No personal defaults.** `person.language` and `person.tone` default to empty (no preference; `init` still detects the language of the machine), placeholders (`<you>`, `example-org`, `DEMO`) replace real names in `config.example.yaml`, adapters default to `none`, automation jobs have generic names, `board.oncallLabel` is empty (the badge reads "Priority").
+- **Team-process rules are optional.** `rules/optional/{planning-tracker,five-line-plan,drafts}.md` are rendered into `COORDINATOR.md` only when named in `rules.optional`. New installs write `rules: {optional: []}`. A config without the key keeps all of them, so existing installs render as before; migrating that key is left to the upgrade work.
+- **`oncall` stays the field name** in the board schema, CLI (`--oncall`) and panel protocol; the wording is "priority".

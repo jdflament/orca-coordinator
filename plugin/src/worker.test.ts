@@ -87,7 +87,7 @@ test('board.get merges the board with live workers, liveness and panel.json', as
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
     const view = await worker.request('board.get')
-    assert.equal(view.focus, 'PROJ-100 checkout redesign: merge api #42, then web #310')
+    assert.equal(view.focus, 'DEMO-100 demo feature: merge api #42, then web #310')
     assert.equal(view.decisions?.length, 3)
     assert.equal(view.coordinatorLive, true)
     assert.deepEqual(view.repoColors, { api: '#123456' })
@@ -204,7 +204,7 @@ test('board.send offline: queues a pending decision\'s option as a decision, nud
   await withFakeOrca(false, async () => {
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    for (const text of ['done 1', 'nudge PROJ-102', 'hello world', 'done 3', 'merge 1']) {
+    for (const text of ['done 1', 'nudge DEMO-102', 'hello world', 'done 3', 'merge 1']) {
       assert.deepEqual(await worker.request('board.send', { text }), { sent: false, queued: true })
     }
     const lines = readFileSync(join(dir, 'inbox.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l) as Record<string, unknown>)
@@ -212,7 +212,7 @@ test('board.send offline: queues a pending decision\'s option as a decision, nud
       lines.map(({ at: _at, ...entry }) => entry),
       [
         { kind: 'decision', decisionId: '1', optionId: 'done' },
-        { kind: 'command', command: 'nudge', target: 'PROJ-102' },
+        { kind: 'command', command: 'nudge', target: 'DEMO-102' },
         { kind: 'message', text: 'hello world' },
         { kind: 'message', text: 'done 3' },
         { kind: 'message', text: 'merge 1' }
@@ -572,7 +572,7 @@ test('board.get: Work lists each configured repo\'s uncommitted or unpushed work
       { name: 'clean', path: gitRepo(join(work, 'clean'), { remote: true }) },
       { name: 'ahead', path: gitRepo(join(work, 'ahead'), { remote: true, ahead: true }) },
       { name: 'local-only', path: gitRepo(join(work, 'local-only')) },
-      { name: 'covered', path: gitRepo(join(work, 'covered'), { branch: 'alex/proj-7', dirty: true }) },
+      { name: 'covered', path: gitRepo(join(work, 'covered'), { branch: 'me/demo-7', dirty: true }) },
       { name: 'not-a-repo', path: join(work, 'plain') },
       // A folder inside a dirty repo: git status there would report the repo's changes under its name.
       { name: 'inside-dirty', path: join(work, 'dirty', 'docs') },
@@ -582,7 +582,7 @@ test('board.get: Work lists each configured repo\'s uncommitted or unpushed work
     mkdirSync(join(work, 'dirty', 'docs'))
     writeConfig(home, '', repos)
     const dir = stateFolder()
-    writeFileSync(join(dir, 'board.json'), JSON.stringify({ version: 2, tasks: [{ id: 'PROJ-7', repo: 'covered', status: 'local' }] }))
+    writeFileSync(join(dir, 'board.json'), JSON.stringify({ version: 2, tasks: [{ id: 'DEMO-7', repo: 'covered', status: 'local' }] }))
     const workers = [{ dispatchId: 'ctx_a', state: 'running', outcome: 'in_progress', terminal: 'term_a', taskId: 'task_a' }, { dispatchId: 'ctx_x', state: 'running', terminal: 'term_x', taskId: 'task_x' }]
     await withFakeOrca(false, async () => {
       const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })

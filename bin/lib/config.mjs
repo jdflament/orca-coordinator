@@ -38,9 +38,9 @@ export function defaultOrcaBin() {
 }
 
 const DEFAULT_AUTOMATIONS = [
-  { playbook: 'pr-comments', schedule: '0 9-19 * * 1-5', precheck: 'pr-comments', name: 'My PRs: draft replies and fixes to review comments' },
-  { playbook: 'pr-review', schedule: '15 9,12,15,18 * * 1-5', precheck: 'pr-review', name: "Teammates' PRs: draft my review" },
-  { playbook: 'ticket-triage', schedule: '30 9 * * 1-5', precheck: 'ticket-triage', name: 'Tickets: triage new ones and plan' },
+  { playbook: 'pr-comments', schedule: '0 9-19 * * 1-5', precheck: 'pr-comments', name: 'Review comments on my PRs: propose replies and fixes' },
+  { playbook: 'pr-review', schedule: '15 9,12,15,18 * * 1-5', precheck: 'pr-review', name: 'Review requests: prepare a review' },
+  { playbook: 'ticket-triage', schedule: '30 9 * * 1-5', precheck: 'ticket-triage', name: 'New work items: triage and plan' },
   { playbook: 'cleanup', schedule: '0 18 * * *', precheck: 'none', name: 'Cleanup: close idle sessions, remove merged worktrees' },
   { playbook: 'eval-weekly', schedule: '0 9 * * 1', precheck: 'eval-weekly', name: 'Coordinator: weekly self-evaluation' },
   { playbook: 'playbook-regression', schedule: '0 10 * * 1-5', precheck: 'playbook-regression', name: 'Coordinator: playbook regression check' }
@@ -48,7 +48,7 @@ const DEFAULT_AUTOMATIONS = [
 
 export function defaults() {
   return {
-    person: { name: 'you', github: '', language: 'en', tone: 'plain, 2-4 sentences', uiTermsLanguage: 'en', voiceFile: null },
+    person: { name: 'you', github: '', language: '', tone: '', uiTermsLanguage: 'en', voiceFile: null },
     paths: {
       package: PACKAGE_ROOT,
       state: defaultStatePath(),
@@ -80,7 +80,7 @@ export function defaults() {
     queue: { max: 3, staleHours: 24 },
     budget: { stateBytes: 2500, reportHead: 2500, workerRetries: 1, maxWorkersPerTrigger: 3 },
     automations: { enabled: false, timezone: 'UTC', graceMinutes: 720, jobs: DEFAULT_AUTOMATIONS.map((j) => ({ ...j })) },
-    board: { oncallLabel: 'oncall', repoColors: {} }
+    board: { oncallLabel: '', repoColors: {} }
   }
 }
 
@@ -173,6 +173,21 @@ function normalize(config) {
   return config
 }
 
+/**
+ * Optional team-process rules: rules/optional/<name>.md, included in COORDINATOR.md only when listed
+ * in `rules.optional`. defaults() leaves the key out on purpose: a config without it keeps every
+ * optional rule (today's behaviour for existing installs); `rules: {optional: []}` turns them all off.
+ */
+export function availableOptionalRules() {
+  const dir = path.join(PACKAGE_ROOT, 'rules', 'optional')
+  return fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.md')).map((f) => f.slice(0, -3)).sort() : []
+}
+
+export function enabledOptionalRules(config) {
+  const listed = config?.rules?.optional
+  return Array.isArray(listed) ? listed : availableOptionalRules()
+}
+
 export const TICKETING_KINDS = ['linear', 'jira', 'github', 'none']
 export const CHAT_KINDS = ['slack', 'none']
 export const FLAGS_KINDS = ['unleash', 'none']
@@ -202,6 +217,9 @@ export function validate(config) {
     if (!job.playbook) problems.push('automations.jobs[]: playbook is required')
     if (!job.schedule) problems.push(`automations.jobs[${job.playbook}]: schedule is required`)
   }
+  const optional = config.rules?.optional
+  if (optional !== undefined && !Array.isArray(optional)) problems.push('rules.optional must be a list of rule names')
+  else for (const name of optional || []) if (!availableOptionalRules().includes(name)) problems.push(`rules.optional: unknown rule "${name}" (available: ${availableOptionalRules().join(', ')})`)
   for (const repo of config.repos) if (!repo.name) problems.push('repos[]: name is required')
   problems.push(...validateRepoAdapters(config))
   return problems

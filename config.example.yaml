@@ -4,10 +4,10 @@
 # (secretRef: keychain:<service>), in an env var (env:NAME) or in a file (file:<path>).
 
 person:
-  name: Alex                      # how the coordinator addresses you
-  github: alex-dev                # your GitHub login
-  language: en                    # language of drafts the coordinator writes for you
-  tone: plain, 2-4 sentences      # tone of those drafts
+  name: <you>                      # how the coordinator addresses you
+  github: <your-login>             # your GitHub login
+  language: ""                    # optional: language the coordinator writes in for you (empty: no preference)
+  tone: ""                        # optional: writing style (empty: no preference)
   uiTermsLanguage: en             # UI labels are quoted in this language, never translated
   voiceFile: null                 # optional file with samples of your review voice
 
@@ -48,14 +48,14 @@ repos:
   - name: api
     path: ~/code/api
     base: main
-    ticketing: {kind: jira, team: PAY}
-    chat: {draftOnlyChannels: [payments-incidents]}
+    ticketing: {kind: jira, team: DEMO}
+    chat: {draftOnlyChannels: [example-channel]}
   - {name: web, path: ~/code/web, base: main}  # uses the default adapters below
 
 github:
-  org: acme
-  reviewTeams: [acme/platform]               # review requests to these teams count as yours
-  skipRepos: [infra-gitops]                  # never reviewed
+  org: example-org
+  reviewTeams: [example-org/platform]               # review requests to these teams count as yours
+  skipRepos: [example-infra]                  # never reviewed
   botReviewer: ""                            # e.g. copilot-pull-request-reviewer
   requestBotReview: false                    # request that reviewer on every new PR
 
@@ -65,13 +65,13 @@ github:
 # check on schedule with its own tools. Default for repos without their own block.
 adapters:
   ticketing:
-    kind: linear                             # linear | jira | github | none
-    team: ENG                                # team key (Linear) or project key (Jira)
+    kind: none                               # linear | jira | github | none
+    team: DEMO                               # team key (Linear) or project key (Jira)
     todoStates: [Backlog, Todo, Triage]      # states that mean "not started"
     childLabel: ""                           # label the coordinator puts on child tickets it creates
     issueUrl: ""                             # optional: only the adapter's `url` verb uses it; board items carry their own url
   chat:
-    kind: slack                              # slack | none
+    kind: none                               # slack | none
     via: mcp:slack                           # the agent tool family used to read chat
     mentionIds: []                           # your user id and team group id, to detect mentions
     reviewChannels: []                       # channels where teammates ask for reviews
@@ -83,6 +83,11 @@ adapters:
     uiUrl: ""                                # e.g. https://flags.example.com/projects/default/features/{flag}
     secretRef: ""                           # keychain:<service> | env:<NAME> | file:<path>
 
+# Optional team-process rules (rules/optional/*.md): planning-tracker, five-line-plan, drafts.
+# [] = none (new installs). A config without this key keeps all of them (older installs).
+rules:
+  optional: []
+
 sensitive: [commit, push, pr-open, pr-merge, pr-comment, ticket-write, chat-post, db, deploy, prod, delete-branch, settings-allow-deny]
 queue: {max: 3, staleHours: 24}
 budget: {stateBytes: 2500, reportHead: 2500, workerRetries: 1, maxWorkersPerTrigger: 3}
@@ -92,13 +97,13 @@ automations:
   timezone: UTC
   graceMinutes: 720
   jobs:
-    - {playbook: pr-comments, schedule: "0 9-19 * * 1-5", precheck: pr-comments, name: "My PRs: draft replies and fixes to review comments"}
-    - {playbook: pr-review, schedule: "15 9,12,15,18 * * 1-5", precheck: pr-review, name: "Teammates' PRs: draft my review"}
-    - {playbook: ticket-triage, schedule: "30 9 * * 1-5", precheck: ticket-triage, name: "Tickets: triage new ones and plan"}
+    - {playbook: pr-comments, schedule: "0 9-19 * * 1-5", precheck: pr-comments, name: "Review comments on my PRs: propose replies and fixes"}
+    - {playbook: pr-review, schedule: "15 9,12,15,18 * * 1-5", precheck: pr-review, name: "Review requests: prepare a review"}
+    - {playbook: ticket-triage, schedule: "30 9 * * 1-5", precheck: ticket-triage, name: "New work items: triage and plan"}
     - {playbook: cleanup, schedule: "0 18 * * *", precheck: none, name: "Cleanup: close idle sessions, remove merged worktrees"}
     - {playbook: eval-weekly, schedule: "0 9 * * 1", precheck: eval-weekly, name: "Coordinator: weekly self-evaluation"}
     - {playbook: playbook-regression, schedule: "0 10 * * 1-5", precheck: playbook-regression, name: "Coordinator: playbook regression check"}
 
 board:
-  oncallLabel: oncall
+  oncallLabel: ""                           # text of the priority badge on items flagged oncall; empty shows "Priority"
   repoColors: {}                             # optional {repo: "#hex"}; unset repos get a stable hash colour

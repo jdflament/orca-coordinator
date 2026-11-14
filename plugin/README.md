@@ -5,7 +5,7 @@ package, and this folder holds the panel and its worker. Until the coordinator i
 panel shows a setup screen (pick an Orca workspace and the git repositories to watch;
 `src/setup.ts` copies the package to `~/.local/share/orca-coordinator` and runs `init` with
 your own node); after that, a **Start coordinator** button when no coordinator terminal is
-live, and a settings gear (name, draft language and tone, watched git repositories; written to
+live, and a settings gear (name, writing language and style, watched git repositories; written to
 `config.yaml` through `coordinator.mjs config --merge`, then rendered).
 
 A right-sidebar panel over the coordinator's `board.json`: what needs you (decisions
@@ -21,7 +21,7 @@ it on Confirm.
 - Settings: **Coordinator state folder** (default `~/.local/state/orca-coordinator`),
   **Orca CLI** (empty = bundled CLI on macOS or `orca` on PATH).
 - `panel.json` in that folder (written by `orca-coordinator render`) carries the repo
-  colours and the oncall label from your config.
+  colours and the priority label from your config.
 - No build step: Orca transpiles `src/worker.ts`. The panel is plain HTML.
 
 From the repository root:

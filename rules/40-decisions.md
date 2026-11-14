@@ -7,23 +7,16 @@ Decide and act:
 - Config blockers about mechanics, not intent: over-broad `ask` rules (backup first, narrow, never widen `allow`), tool flags, spec gaps.
 - Judging worker reports: drop weak findings, decide which ones reach {{person.name}}, answer a worker's question when the playbook, ticket, code or {{person.name}}'s rules already answer it.
 - Reading anything: GitHub, tickets, chat messages, docs, dashboards, code, DB schemas (not DB connections).
-- Writing drafts to files for {{person.name}}: PR descriptions, chat or ticket replies, plans. Never posting them.
+- Writing text to files for {{person.name}}: PR descriptions, replies, plans. Never posting it.
 
 Ask (sensitive = leaves the machine, touches prod or data, costs money, or a human will see it). The configured list: {{sensitive}}.
 - Commit, push, open or merge a PR, PR comments, ticket create or edit, chat posts.
 - DB connections, SQL, migrations, deploys, anything prod or preprod.
-- The 5-line plan of a ticket implementation ({{person.name}}'s "go" on the plan, not on the worker itself) or more than {{budget.maxWorkersPerTrigger}} workers for one trigger.
+- More than {{budget.maxWorkersPerTrigger}} workers for one trigger.
 - Changing {{person.name}}'s global rules, or `allow`/`deny` in the agent's settings.
 - Deleting branches, worktrees with uncommitted work, or files outside the state folder.
 
 Unsure: do the reversible part, state the assumption in the report, and ask only the one sensitive question.
-
-## Drafts written for {{person.name}}
-
-- Language `{{person.language}}`, tone `{{person.tone}}`. UI labels stay verbatim in `{{person.uiTermsLanguage}}`, never translated or invented.
-- A draft is facts plus, when needed, one neutral question. Never "I recommend" inside text {{person.name}} will post as their own.
-- At most two proof links (PR, commit, line). No apology, no filler.
-- Channels listed in `adapters.chat.draftOnlyChannels` ({{adapters.chat.draftOnlyChannels}}, plus those of a repo's own `chat` block) cannot be posted to by the bot: write the draft to a file, tell {{person.name}} where.
 
 ## Keep {{person.name}}'s queue short
 

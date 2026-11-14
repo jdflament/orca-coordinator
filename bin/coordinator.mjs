@@ -20,9 +20,11 @@ import {
   defaultConfigPath,
   defaultOrcaBin,
   defaultStatePath,
+  availableOptionalRules,
   defaults,
   deepMerge,
   detectBase,
+  enabledOptionalRules,
   expandHome,
   FLAGS_KINDS,
   isGitRepo,
@@ -155,8 +157,8 @@ function tilde(value) {
 const QUESTIONS = [
   { key: 'person.name', flag: 'name', ask: 'Your name (how the coordinator addresses you)' },
   { key: 'person.github', flag: 'github', ask: 'Your GitHub login' },
-  { key: 'person.language', flag: 'language', ask: 'Language of the drafts it writes for you' },
-  { key: 'person.tone', flag: 'tone', ask: 'Tone of those drafts' },
+  { key: 'person.language', flag: 'language', ask: 'Language it writes in for you (optional, empty for none)' },
+  { key: 'person.tone', flag: 'tone', ask: 'Writing style (optional, empty for none)' },
   { key: 'person.uiTermsLanguage', flag: 'ui-language', ask: 'Language UI labels are quoted in' },
   { key: 'paths.workspace', flag: 'workspace', ask: 'Orca workspace folder that hosts the coordinator', choices: listMainWorktrees },
   { key: 'paths.worktreeRoot', flag: 'worktree-root', ask: 'Folder where Orca creates worktrees (cleanup only touches these)' },
@@ -344,6 +346,8 @@ async function init() {
   config.paths.package = PACKAGE_ROOT
   config.paths.state = defaultStatePath()
   const existed = fs.existsSync(configPath)
+  // New installs start without the optional team-process rules; an existing config keeps what it has.
+  if (!existed) config.rules = { optional: [] }
   if (existed) config = deepMerge(config, readYamlFile(configPath) || {})
   // A flag beats the existing file.
   if (opt('state')) config.paths.state = path.resolve(expandHome(opt('state')))
@@ -497,7 +501,8 @@ function renderAll(config) {
 
   // COORDINATOR.md: rules/*.md in order, then rules.local.md.
   const rules = fs.readdirSync(path.join(PACKAGE_ROOT, 'rules')).filter((f) => f.endsWith('.md')).sort()
-  const parts = rules.map((f) => render(fs.readFileSync(path.join(PACKAGE_ROOT, 'rules', f), 'utf8'), values, { file: f }))
+  const optional = enabledOptionalRules(config).filter((n) => availableOptionalRules().includes(n)).map((n) => path.join('optional', `${n}.md`))
+  const parts = [...rules, ...optional].map((f) => render(fs.readFileSync(path.join(PACKAGE_ROOT, 'rules', f), 'utf8'), values, { file: f }))
   const local = path.join(configDir, 'rules.local.md')
   if (fs.existsSync(local)) parts.push(render(fs.readFileSync(local, 'utf8'), values, { strict: false, file: local }))
   writeFile(path.join(state, 'COORDINATOR.md'), `<!-- rendered by orca-coordinator render on ${today()}; edit rules/ or rules.local.md, not this file -->\n\n` + parts.join('\n\n'))
@@ -521,7 +526,7 @@ function renderAll(config) {
   // coordinator wrote (`coordinator tools --set`, read by workers and automation sessions), kept as it is.
   const recorded = readPanelJson(state)
   const kept = Object.fromEntries(['tools', 'detectedAt'].filter((key) => key in recorded).map((key) => [key, recorded[key]]))
-  writeFile(path.join(state, 'panel.json'), JSON.stringify({ repoColors: config.board.repoColors || {}, oncallLabel: config.board.oncallLabel || 'oncall', ...kept }, null, 2) + '\n')
+  writeFile(path.join(state, 'panel.json'), JSON.stringify({ repoColors: config.board.repoColors || {}, oncallLabel: config.board.oncallLabel || '', ...kept }, null, 2) + '\n')
 
   // Wrappers: short scripts the rules, the panel and the human call by a fixed name.
   const pkg = PACKAGE_ROOT

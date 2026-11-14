@@ -56,7 +56,7 @@ Then press **Start coordinator** in the panel: it opens your agent in that works
 coordinator skill loaded. Setup copies the package to `~/.local/share/orca-coordinator` (Orca
 keeps each plugin version in its own folder; the skill link and the wrappers need a path that
 does not move) and runs `orca-coordinator init --yes` there. The button disappears once the
-coordinator is running. The gear in the panel header edits your name, draft language and tone,
+coordinator is running. The gear in the panel header edits your name, writing language and style,
 and the watched git repositories later: it merges them into `config.yaml` (validated, read
 back) and re-renders. Everything else (automations, queue, budget, CLI adapters) is edited in
 `config.yaml` only.
@@ -89,7 +89,7 @@ start at `none`. `--yes` takes all of it without asking.
 Non-interactive, all flags:
 
 ```sh
-./setup.sh --yes --name Alex --github alex-dev --workspace ~/code --github-org acme \
+./setup.sh --yes --name <you> --github <your-login> --workspace ~/code --github-org <your-org> \
   --flags none --automations   # agents come from Orca; --worker-agent/--coordinator-agent only to pin one
 ```
 
@@ -124,7 +124,8 @@ can use).
 
 | Key | What it drives |
 | --- | -------------- |
-| `person.name`, `github`, `language`, `tone`, `uiTermsLanguage`, `voiceFile` | how the coordinator addresses you, how drafts and review comments are written |
+| `person.name`, `github`, `language`, `tone`, `uiTermsLanguage`, `voiceFile` | how the coordinator addresses you and, when you set them (all optional), the language and style it writes in |
+| `rules.optional` | team-process rules from [`rules/optional/`](rules/optional/) to include: `planning-tracker`, `five-line-plan`, `drafts`. `[]` = none (new installs); a config without the key keeps all of them |
 | `paths.package`, `state`, `workspace`, `worktreeRoot`, `orca` | where the package, the runtime state, your Orca workspace, Orca's worktrees and the Orca CLI are |
 | `agents.coordinator.agent`, `agents.worker.{agent,model,extraArgs,permissionsFile}`, `agents.automation.provider` | which agent runs each role; empty (the default) = the agent Orca reports for the coordinator's terminal, no agent is assumed |
 | `agents.coordinator.statusline` | install the ◆ COORDINATOR / WORKER status-line badge (see below) |
@@ -138,7 +139,7 @@ can use).
 | `queue.max`, `queue.staleHours` | how many items may wait on you, when they go stale |
 | `budget.stateBytes`, `reportHead`, `workerRetries`, `maxWorkersPerTrigger` | the cost rules below |
 | `automations.enabled`, `timezone`, `graceMinutes`, `jobs[]` | the scheduled jobs: `{playbook, schedule, precheck, name}` |
-| `board.oncallLabel`, `board.repoColors` | the panel's oncall badge text and per-repo colours |
+| `board.oncallLabel`, `board.repoColors` | the panel's priority badge text (empty: "Priority") and per-repo colours |
 
 Secrets never go in the file: `secretRef` points at the keychain, an env var or a file.
 
@@ -196,8 +197,8 @@ as MCP servers (Linear, Jira, Slack, Notion, GitHub…) or CLIs (`gh`, `linear`,
 session start it lists them and records names only with
 `orca-coordinator tools --set "Linear:mcp,GitHub:gh"` (`<state>/panel.json`: `tools`,
 `detectedAt`; `orca-coordinator tools` prints it, for workers and automation sessions). When it
-learns which tool a repository uses it keeps a one-line hint in `state.md` (`benkyoji: tickets in
-Linear team BEN`). Board items carry their own `url`, written from the tool it used; the panel
+learns which tool a repository uses it keeps a one-line hint in `state.md` (`<repo>: tickets in
+<tracker> team <KEY>`). Board items carry their own `url`, written from the tool it used; the panel
 only recognises common hosts (linear.app, *.atlassian.net, github.com, slack.com, notion.so…) to
 pick an icon, and any other link still opens. Nothing about tools is configured or shown in the
 panel. Writes (ticket comments, status, chat posts) stay sensitive: only on your go.
@@ -241,7 +242,7 @@ and the local git work of the configured repos, and forwards clicks. Sections: h
 dot, last update, Start coordinator or jump to it, ⋯ menu, settings gear), focus line,
 counters, standing instructions, **Needs you** (decisions with their action badge and
 imperative buttons, workers waiting for input), **Work** (tickets grouped by workstream with
-repo colour, PR link, status, oncall badge, nudge on blocked, done fold; then one row per
+repo colour, PR link, status, priority badge, nudge on blocked, done fold; then one row per
 configured repo with uncommitted or unpushed changes no board task covers, which opens that
 repo in Orca's Source Control), **Agents** (board agents and live workers with stop; the
 heading opens Orca's Workspace Board).

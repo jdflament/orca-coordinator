@@ -100,7 +100,7 @@
       .repo i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
       .state { font-size: 11px; white-space: nowrap; flex: none; margin-left: auto; }
       .pr { color: var(--muted); font-size: 11px; flex: none; }
-      /* Badge (outline, 10px): the oncall marker. */
+      /* Badge (outline, 10px): the priority marker. */
       .oncall { flex: none; font-size: 10px; font-weight: 500; line-height: 14px; padding: 0 6px; border: 1px solid color-mix(in srgb, var(--danger) 30%, transparent); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--danger) 10%, transparent); color: var(--danger); }
 
       /* Decision cards (Needs you): the one multi-line item. */
@@ -213,7 +213,7 @@
     <script>
       const PALETTE = ['#8957e5', '#bf8700', '#0e8a8a', '#2f6fbf', '#1f883d', '#c2410c', '#b03a8f', '#5a6b2f']
       let repoColors = {}
-      let oncallLabel = 'oncall'
+      let oncallLabel = 'Priority'
       const repoColor = (repo) => repoColors[repo] || PALETTE[[...text(repo)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 9973, 7) % PALETTE.length]
       const STATE_COLORS = { pr: 'blue', review: 'blue', working: 'blue', running: 'blue', active: 'blue', hold: 'amber', waiting: 'amber', merged: 'green', done: 'green', succeeded: 'green', failed: 'danger', local: 'amber', blocked: 'danger', 'needs-input': 'danger', 'needs input': 'danger', idle: 'muted' }
       const ICONS = {
@@ -231,7 +231,7 @@
         chev: '<svg viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>',
         gear: '<svg viewBox="0 0 24 24"><path d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"/><circle cx="12" cy="12" r="3"/></svg>'
       }
-      // Languages the coordinator writes drafts in: stored as the code, shown by their own name.
+      // Languages the coordinator can write in for you: stored as the code, shown by their own name.
       const LANGUAGES = [['en', 'English'], ['fr', 'Français'], ['de', 'Deutsch'], ['es', 'Español'], ['it', 'Italiano'], ['pt', 'Português'], ['nl', 'Nederlands'], ['pl', 'Polski'], ['sv', 'Svenska'], ['tr', 'Türkçe'], ['uk', 'Українська'], ['ru', 'Русский'], ['ja', '日本語'], ['ko', '한국어'], ['zh', '中文']]
       const DONE_SHOWN = 15
       const SENT_LOCK_MS = 5000
@@ -635,7 +635,7 @@
 
       function render(board) {
         repoColors = board.repoColors && typeof board.repoColors === 'object' ? board.repoColors : {}
-        oncallLabel = text(board.oncallLabel) || 'oncall'
+        oncallLabel = text(board.oncallLabel) || 'Priority'
         // board.get already merged each board agent into its live worker (same id, else name = title).
         const workers = list(board.workers)
         const agents = list(board.agents)
