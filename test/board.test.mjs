@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
 import { validateAgainst } from '../bin/lib/validate.mjs'
+import { sandbox } from './helpers.mjs'
 
 const BOARD = new URL('../bin/board.mjs', import.meta.url).pathname
 const SCHEMA = JSON.parse(fs.readFileSync(new URL('../schema/board.schema.json', import.meta.url), 'utf8'))
@@ -173,4 +174,71 @@ test('board inbox: when the board cannot be written, the clicks stay in the inbo
   board.tasks = []
   fs.writeFileSync(b.file, JSON.stringify(board))
   assert.equal(JSON.parse(b.run('inbox').out).applied, 1, 'the next drain applies them')
+})
+
+// ---- reconcile: decisions settle when their "settles when" holds (gh is the mocked boundary) ----
+
+const PR = (n) => `https://github.com/acme/api/pull/${n}`
+
+function reconcileBox(rules) {
+  const box = sandbox()
+  box.fake('gh', rules)
+  const b = boardIn(box.state)
+  const run = (...args) => {
+    const r = spawnSync(process.execPath, [BOARD, ...args], { encoding: 'utf8', env: { ...box.env, COORDINATOR_BOARD: b.file, ORCA_COORDINATOR_CONFIG: box.configPath } })
+    return { status: r.status, out: r.stdout.trim(), err: r.stderr.trim() }
+  }
+  run('init')
+  return { box, b, run }
+}
+
+test('board reconcile: settles the decision whose PR merged, leaves the open PR and the decision without a condition', () => {
+  const { box, b, run } = reconcileBox([
+    { match: ['pr', 'view', PR(1)], stdout: JSON.stringify({ state: 'MERGED', reviews: [] }) },
+    { match: ['pr', 'view', PR(2)], stdout: JSON.stringify({ state: 'OPEN', reviews: [] }) }
+  ])
+  run('ask', 'PROJ-1', '--url', PR(1), '--action', 'Merge', '--settles-when', 'pr-merged')
+  run('ask', 'PROJ-2', '--url', PR(2), '--action', 'Merge', '--settles-when', 'pr-merged')
+  run('ask', 'PROJ-3', '--url', PR(1), '--action', 'Decide')
+  const out = run('reconcile')
+  assert.equal(out.out, 'settled 1')
+  const [d1, d2, d3] = b.read().decisions
+  assert.equal(d1.status, 'answered')
+  assert.equal(d2.status, 'pending')
+  assert.equal(d3.status, 'pending', 'no settles-when: never touched')
+  assert.equal(box.calls('gh').length, 2, 'gh is asked only for decisions with a condition')
+})
+
+test('board reconcile: pr-closed settles on closed, pr-reviewed only on a review by the configured GitHub user (not a pending one)', () => {
+  const { run, b } = reconcileBox([
+    { match: ['pr', 'view', PR(1)], stdout: JSON.stringify({ state: 'CLOSED', reviews: [] }) },
+    { match: ['pr', 'view', PR(2)], stdout: JSON.stringify({ state: 'OPEN', reviews: [{ author: { login: 'bob' }, state: 'APPROVED' }, { author: { login: 'alex' }, state: 'PENDING' }] }) },
+    { match: ['pr', 'view', PR(3)], stdout: JSON.stringify({ state: 'OPEN', reviews: [{ author: { login: 'alex' }, state: 'APPROVED' }] }) }
+  ])
+  run('ask', 'A', '--url', PR(1), '--settles-when', 'pr-closed')
+  run('ask', 'B', '--url', PR(2), '--settles-when', 'pr-reviewed')
+  run('ask', 'C', '--url', PR(3), '--settles-when', 'pr-reviewed')
+  assert.equal(run('reconcile').out, 'settled 1\nsettled 3')
+  assert.deepEqual(b.read().decisions.map((d) => d.status), ['answered', 'pending', 'answered'])
+})
+
+test('board reconcile: a failing gh changes nothing, writes nothing and exits 0', () => {
+  const { run, b } = reconcileBox([{ match: ['pr', 'view'], stdout: '', status: 1 }])
+  run('ask', 'PROJ-1', '--url', PR(1), '--settles-when', 'pr-merged')
+  const before = fs.readFileSync(b.file, 'utf8')
+  const r = run('reconcile')
+  assert.equal(r.status, 0)
+  assert.match(r.err, /gh failed for decision 1/)
+  assert.equal(fs.readFileSync(b.file, 'utf8'), before)
+})
+
+test('board ask --settles-when: an unknown condition or a url that is not a GitHub PR is refused and nothing is written', () => {
+  const b = boardIn()
+  b.run('init')
+  const before = fs.readFileSync(b.file, 'utf8')
+  assert.match(b.run('ask', 'X', '--url', PR(1), '--settles-when', 'bogus').err, /must be one of pr-merged\|pr-closed\|pr-reviewed/)
+  assert.match(b.run('ask', 'X', '--url', 'https://example.test/t/1', '--settles-when', 'pr-merged').err, /GitHub pull request URL/)
+  assert.equal(fs.readFileSync(b.file, 'utf8'), before)
+  assert.equal(b.run('ask', 'Y', '--url', PR(1), '--settles-when', 'pr-merged').status, 0)
+  assert.equal(b.read().decisions[0].settlesWhen, 'pr-merged')
 })

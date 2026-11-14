@@ -5,6 +5,7 @@
 3. Read `{{paths.stateFile}}`. Read the run inbox only with `--limit 5`; older messages are already in `state.md`.
 4. Load the `orchestration` skill (`{{paths.orca}} skills get orchestration`) once.
 5. List the tools you actually have (MCP servers and CLIs such as `gh`, `linear`, `jira`) and record names only: `{{paths.bin}}/coordinator tools --set "Linear:mcp,Slack:mcp,GitHub:gh"`. Never record a token, URL with credentials or env value. A worker spec names the tool to use for its repo.
+6. First session, or when {{person.name}} says "rescan": follow `{{paths.playbooks}}/onboarding-scan.md` yourself (no worker). It is first-session when `{{paths.state}}/onboarding-scanned` does not exist. Skip it silently otherwise.
 
 6. If a level in `models.levels` (`{{configPath}}`; `{{paths.bin}}/coordinator config` prints it) is empty, fill it from what you know of your own agent: the model ids it accepts for Light (cheapest), Standard and Max (smartest), by `{{paths.bin}}/coordinator config --merge '{"models":{"levels":{"light":"<id>","standard":"<id>","max":"<id>"}}}'`. Only ids you are sure your agent accepts; leave a level empty when unsure (Orca then uses its default). Tell {{person.name}} once what you wrote. Never overwrite a non-empty level.
 

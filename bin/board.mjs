@@ -44,6 +44,11 @@ const REPO_STATES = enumOf(SCHEMA.properties.repos.items.properties.status)
 const REPO_KINDS = enumOf(SCHEMA.properties.repos.items.properties.kind)
 const INSTRUCTION_STATES = enumOf(SCHEMA.properties.instructions.items.properties.status)
 
+const SETTLES_WHEN = enumOf(SCHEMA.properties.decisions.items.properties.settlesWhen)
+const GH_TIMEOUT_MS = 15000
+const PR_URL = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/
+
+const list = (value) => (Array.isArray(value) ? value : [])
 const now = () => new Date().toISOString()
 
 function emptyBoard() {
@@ -463,11 +468,17 @@ const commands = {
   },
 
   ask(title) {
-    if (!title) throw new Error('usage: ask <title> [--repo ..] [--url ..] [--action <verb>] [--context ..] [--options "id:Label*|id:Label"] [--recommend <id|label>] [--oncall]')
+    if (!title) throw new Error('usage: ask <title> [--repo ..] [--url ..] [--action <verb>] [--context ..] [--options "id:Label*|id:Label"] [--recommend <id|label>] [--settles-when ${SETTLES_WHEN.join('|')}] [--oncall]')
     const board = load()
     const action = option('action') || 'Decide'
     const options = parseOptions(option('options') || `done:${action}*|skip:Skip|explain:Explain`, option('recommend'))
+    const settlesWhen = option('settles-when')
+    if (settlesWhen !== undefined) {
+      assertState(settlesWhen, SETTLES_WHEN, '--settles-when')
+      if (!PR_URL.test(option('url') || '')) throw new Error(`--settles-when ${settlesWhen} needs --url to be a GitHub pull request URL`)
+    }
     const decision = { id: nextId(board, 'decision'), title, repo: option('repo') || '', url: option('url') || '', action, context: option('context') || '', options, status: 'pending', createdAt: now() }
+    if (settlesWhen) decision.settlesWhen = settlesWhen
     setOncall(decision)
     board.decisions.push(decision)
     log(board, `decision ${decision.id} raised: ${title} (${action})`)
@@ -489,6 +500,46 @@ const commands = {
     log(board, `decision ${id} answered: ${d.answer}`)
     save(board)
     console.log(`${d.id} → ${d.answer}`)
+  },
+
+  // Zero-model: settles pending decisions whose "settles when" condition is met (PRs, through gh).
+  // A gh failure leaves the decision pending; the next run checks again.
+  reconcile() {
+    const board = load()
+    const me = (() => {
+      try {
+        return loadConfig({ strict: false }).config.person?.github || ''
+      } catch {
+        return ''
+      }
+    })()
+    const settled = []
+    for (const d of board.decisions) {
+      if (d.status !== 'pending' || !d.settlesWhen) continue
+      const result = spawnSync('gh', ['pr', 'view', d.url, '--json', 'state,reviews'], { encoding: 'utf8', timeout: GH_TIMEOUT_MS })
+      if (result.error || result.status !== 0) {
+        console.error(`board: reconcile: gh failed for decision ${d.id}: ${(result.error?.message || result.stderr || '').trim()}`)
+        continue
+      }
+      let pr
+      try {
+        pr = JSON.parse(result.stdout)
+      } catch {
+        console.error(`board: reconcile: gh gave no JSON for decision ${d.id}`)
+        continue
+      }
+      const reviewed = list(pr.reviews).some((r) => me && r.author?.login === me && r.state !== 'PENDING')
+      const met = { 'pr-merged': pr.state === 'MERGED', 'pr-closed': pr.state === 'MERGED' || pr.state === 'CLOSED', 'pr-reviewed': reviewed }[d.settlesWhen]
+      if (!met) continue
+      d.status = 'answered'
+      d.answer = 'Settled'
+      d.answeredAt = now()
+      d.note = `settled automatically: ${d.settlesWhen}`
+      log(board, `decision ${d.id} settled: ${d.settlesWhen}`)
+      settled.push(d.id)
+    }
+    if (settled.length) save(board)
+    for (const id of settled) console.log(`settled ${id}`)
   },
 
   'decision:rm'(id) {
@@ -606,7 +657,8 @@ commands:
   clean                               prune idle/stopped agents and answered decisions
   instruction:add <text>              record a standing instruction from the human
   instruction:set <id> [--status ${INSTRUCTION_STATES.join('|')}] [--text ..]
-  ask <title> [--repo ..] [--url ..] [--action <verb>] [--context ..] [--options "id:Label*|id:Label"] [--recommend <id>] [--oncall]
+  ask <title> [--repo ..] [--url ..] [--action <verb>] [--context ..] [--options "id:Label*|id:Label"] [--recommend <id>] [--settles-when ${SETTLES_WHEN.join('|')}] [--oncall]
+  reconcile                           settle decisions whose --settles-when is met (gh, no model)
   answer <decisionId> <optionId|label> [--note ..]
   decision:rm <decisionId>
   log <text>                          append a log entry (last ${LOG_KEPT} kept)

@@ -52,6 +52,7 @@
           },
           "status": { "enum": ["pending", "answered"] },
           "answer": { "type": "string" },
+          "settlesWhen": { "enum": ["pr-merged", "pr-closed", "pr-reviewed"], "description": "Optional: `board reconcile` answers the decision when this holds for the PR in `url` (merged; merged or closed; reviewed by the user)." },
           "oncall": { "type": "boolean" },
           "createdAt": { "type": "string" },
           "answeredAt": { "type": "string" }
