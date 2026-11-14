@@ -188,3 +188,53 @@ test('prechecks/eval-weekly.sh: new lessons and a 7-day-old run trigger and reco
   assert.equal(out.out, 'new lessons: 1')
   assert.match(fs.readFileSync(file, 'utf8'), /^2 \d+\n$/)
 })
+
+// ---- bin/scan.sh ----
+
+function scanBox({ onBoard = [] } = {}) {
+  const box = sandbox()
+  fs.mkdirSync(box.state, { recursive: true })
+  fs.writeFileSync(path.join(box.state, 'board.json'), JSON.stringify({ decisions: [], tasks: onBoard.map((url) => ({ url })) }))
+  const pr = (number, repo, login) => ({ number, repository: { name: repo }, url: `https://github.com/acme/${repo}/pull/${number}`, title: `PR ${number}`, author: { login }, commentsCount: 2 })
+  box.fake('gh', [
+    { match: ['api'], stdout: JSON.stringify(['v1.0.1', 'v1.2.0', 'v1.10.0'].map((name) => ({ name }))) },
+    { match: ['search', '--review-requested=@me'], stdout: JSON.stringify([pr(7, 'api', 'bob'), pr(8, 'api', 'bob'), pr(9, 'api', 'alex')]) },
+    { match: ['search', '--author=@me'], stdout: JSON.stringify([pr(3, 'web', 'alex')]) }
+  ])
+  box.fake('orca', [{ match: ['automations', 'list'], stdout: ok({ automations: [
+    { id: 'a1', name: 'Job · pr-review', enabled: true, prompt: '[trigger] pr-review' },
+    { id: 'a2', name: 'My own PR review', enabled: false, prompt: 'review my prs' }
+  ] }) }])
+  return box
+}
+
+test('scan.sh: lists review-requested PRs of others and skips those already on the board', () => {
+  const out = scanBox({ onBoard: ['https://github.com/acme/api/pull/8'] }).run('bin/scan.sh')
+  assert.equal(out.status, 0, out.err)
+  const lines = out.out.split('\n')
+  assert.deepEqual(lines.filter((l) => l.startsWith('review\t')).map((l) => l.split('\t')[1]), ['api#7'])
+  assert.deepEqual(lines.filter((l) => l.startsWith('mine\t')).map((l) => l.split('\t')[1]), ['web#3'])
+})
+
+test('scan.sh: a PR on the board as a task is not listed as one of mine again', () => {
+  const out = scanBox({ onBoard: ['https://github.com/acme/web/pull/3'] }).run('bin/scan.sh')
+  assert.ok(!out.out.includes('mine\t'))
+})
+
+test('scan.sh: separates the coordinator\'s automations from others and compares versions numerically', () => {
+  const out = scanBox().run('bin/scan.sh').out.split('\n')
+  assert.ok(out.includes('automation\ta1\tenabled\tours:pr-review\tJob · pr-review'))
+  assert.ok(out.includes('automation\ta2\tdisabled\tother\tMy own PR review'))
+  assert.match(out.find((l) => l.startsWith('version\t')), /^version\t[\d.]+\t1\.10\.0\toutdated$/)
+})
+
+test('scan.sh: a failed gh or orca is reported as unavailable, not as an empty result', () => {
+  const box = sandbox()
+  fs.mkdirSync(box.state, { recursive: true })
+  box.fake('gh', [{ match: [], stdout: '', status: 1 }])
+  box.fake('orca', [{ match: [], stdout: '', status: 1 }])
+  const out = box.run('bin/scan.sh')
+  assert.equal(out.status, 0, out.err)
+  for (const kind of ['automation', 'review', 'mine']) assert.ok(out.out.split('\n').includes(`${kind}\tunavailable`), kind)
+  assert.match(out.out, /^version\t[\d.]+\tunknown\tcurrent$/m)
+})

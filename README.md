@@ -186,6 +186,7 @@ coordinator.
 | `pr-review` | PRs requesting your (or your team's) review, plus chat pings: review in your voice, zero comments is a valid outcome; submits only on "go" |
 | `ticket-triage` | your not-started tickets: repo verified in code, 5-line plan each, rule violations flagged |
 | `cleanup` | unused terminals and merged worktrees, conservative; metrics at the end |
+| `onboarding-scan` | run by the coordinator itself on its first session and on "rescan": duplicate/conflicting workflows, outdated package, open PRs waiting on you and local work onto the board; no new UI |
 | `eval-weekly` | last week's lessons, metrics, archive and reports → at most 3 unified diffs to the rules or playbooks |
 | `playbook-regression` | re-runs a changed playbook read-only on its last input and reports drift |
 

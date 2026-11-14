@@ -19,6 +19,7 @@ outside config.
 | `pr-review` | reviews PRs that request your review, drafts your comments in your voice | nothing until "go" | precheck `pr-review` |
 | `ticket-triage` | reads your not-started tickets, verifies the repo in code, proposes a 5-line plan each | nothing | precheck `ticket-triage` |
 | `cleanup` | closes unused terminals, removes worktrees whose PR is merged | terminals, worktrees (conservative) | daily, no precheck |
+| `onboarding-scan` | first-session and "rescan" survey (run by the coordinator, `bin/scan` gathers the facts) | the board and `state.md` | session start rule, no automation |
 | `eval-weekly` | turns last week's lessons and metrics into ≤3 diffs to the rules or playbooks | nothing (proposals) | precheck `eval-weekly` |
 | `playbook-regression` | re-runs a changed playbook read-only on its last input, reports drift | nothing | precheck `playbook-regression` |
 
