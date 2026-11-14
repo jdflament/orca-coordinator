@@ -72,6 +72,22 @@ test('init re-run keeps the keys the config already had, unknown ones included',
   assert.equal(config.person.name, 'Alex')
 })
 
+test('init links the skill only into the agents asked for: the coordinator\'s own by default, never a skills folder that merely exists', () => {
+  const box = sandbox()
+  box.fake('orca', [anyOk({ repos: [], worktrees: [] })])
+  box.fake('gh', [{ match: [], stdout: 'alex' }])
+  for (const dir of ['.claude/skills', '.config/opencode/skills', '.agents/skills']) fs.mkdirSync(path.join(box.home, dir), { recursive: true })
+  const links = () => ['.claude', '.config/opencode', '.agents'].map((d) => fs.existsSync(path.join(box.home, d, 'skills/coordinator')))
+  assert.equal(box.run(CLI, [...initArgs, '--coordinator-agent', 'claude']).status, 0)
+  assert.deepEqual(links(), [true, false, false], 'default: the coordinator agent only')
+  fs.rmSync(path.join(box.home, '.claude/skills/coordinator'))
+  assert.equal(box.run(CLI, [...initArgs, '--skill-agent', 'opencode']).status, 0)
+  assert.deepEqual(links(), [false, true, false], 'a picked agent only')
+  fs.rmSync(path.join(box.home, '.config/opencode/skills/coordinator'))
+  assert.equal(box.run(CLI, [...initArgs, '--no-skill-link']).status, 0)
+  assert.deepEqual(links(), [false, false, false], '--no-skill-link links nothing')
+})
+
 test('init --config writes that file and renders rules.local.md from its folder (bug 9)', () => {
   const box = sandbox({ writeConfig: false })
   box.fake('orca', [anyOk({ repos: [], worktrees: [] })])

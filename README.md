@@ -43,21 +43,29 @@ orca plugin install jdflament/orca-coordinator
 ```
 
 Orca shows what the plugin may do (it runs a small worker on your machine) and asks you to
-approve it once. The **Coordinator board** panel then opens on a setup screen: one
-**Set up in <folder>** button for your top Orca folder (**Change folder** picks another), above a
-short form (your name and the git repositories to watch; plain folders are never offered; no
-tool settings: the coordinator uses whatever ticketing and chat tools your agent has). That copies
-the package to `~/.local/share/orca-coordinator` (Orca keeps each plugin version in its own
-folder; the skill link and the wrappers need a path that does not move) and runs
-`orca-coordinator init --yes` there. Then **Start coordinator** opens your agent in that
-workspace with the coordinator skill loaded. The gear in the panel header edits your name,
-draft language and tone, and the watched git repositories later: it merges them into
-`config.yaml` (validated, read back) and re-renders. Everything else (automations, queue,
-budget, CLI adapters) is edited in `config.yaml` only.
+approve it once. The **Coordinator board** panel then opens on one setup screen:
+
+1. Your name and the git repositories to watch (plain folders are never offered).
+2. **Agents**: the ones installed on your computer. Only the agent that runs the coordinator is
+   ticked; tick any other to give it the skill. Optionally tick the status line badge.
+3. The exact paths it will link or edit, listed above the **Set up in <folder>** button
+   (**Change folder** picks another). Nothing outside this plugin's own folders is written
+   before you press it.
+
+Then press **Start coordinator** in the panel: it opens your agent in that workspace with the
+coordinator skill loaded. Setup copies the package to `~/.local/share/orca-coordinator` (Orca
+keeps each plugin version in its own folder; the skill link and the wrappers need a path that
+does not move) and runs `orca-coordinator init --yes` there. The button disappears once the
+coordinator is running. The gear in the panel header edits your name, draft language and tone,
+and the watched git repositories later: it merges them into `config.yaml` (validated, read
+back) and re-renders. Everything else (automations, queue, budget, CLI adapters) is edited in
+`config.yaml` only.
 
 Updates come from Orca too: `orca plugin update --all` (or the Plugins page) installs the next
-release, and the panel brings the package and its rendered rules up to date the next time it
-starts. Your config and state are never touched by an update.
+release, and the panel refreshes the plugin's own files (the package copy, the rendered rules and
+wrappers) the next time it starts. An update never changes agent config: if a skill link points at
+an older copy, the panel shows a one-line notice with an **Update links** button. Your config and
+state are never touched by an update.
 
 The setup needs Node.js ≥ 20.6 on your PATH; the panel says so if it is missing.
 
@@ -98,8 +106,10 @@ What `init` does, in order: writes `~/.config/orca-coordinator/config.yaml`
 (+ `rules.local.md`, `playbooks.local/`), creates `~/.local/state/orca-coordinator/`
 (`state.md`, `board.json`, `lessons.md`, `reports/`, `archive/`, `bin/` wrappers),
 renders `COORDINATOR.md` and `playbooks/` from your config, links
-`skill/coordinator` into every agent skills folder it finds (`~/.claude/skills`,
-`~/.config/opencode/skills`, `~/.agents/skills`; Codex gets a paste hint), installs the
+`skill/coordinator` into the agents you pick (`--skill-agent claude|opencode|agents`,
+repeatable: `~/.claude/skills`, `~/.config/opencode/skills`, `~/.agents/skills`; default: the
+coordinator's own agent; `--no-skill-link` links none; Codex gets a paste hint), edits
+`~/.claude/settings.json` (`statusLine`, backup kept) only with `--statusline`, installs the
 panel through Orca's plugin installer (`orca plugin install <clone>`; it leaves alone a panel
 Orca installed from GitHub) and opens it, and, when `automations.enabled` is true or
 `--automations` is given, registers the scheduled jobs.

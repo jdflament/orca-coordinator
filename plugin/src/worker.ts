@@ -8,7 +8,7 @@ import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
 import type { Board, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
-import { configFile, expandHome, getSetupStatus, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, updateIfInstalledHere } from './setup'
+import { configFile, expandHome, getSetupStatus, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, staleSkillLinks, updateIfInstalledHere, updateLinks } from './setup'
 import { linkHost } from './links'
 
 const DEFAULT_DIR = '~/.local/state/orca-coordinator'
@@ -211,6 +211,7 @@ async function getBoard(): Promise<BoardView> {
   const panel: PanelJson = read && typeof read === 'object' ? read : {}
   const handle = await getCoordinatorHandle().catch(() => '')
   const [list, coordinatorLive] = await Promise.all([listWorkers().catch(() => null), handle ? getIsCoordinatorLive(handle).catch(() => false) : Promise.resolve(false)])
+  const config = await getConfig().catch(() => null)
   const derived = await getDerivedWork(board).catch(() => ({ localWork: [] }))
   const { workers, agents } = mergeBoardAgents(list ? getActiveWorkers(list) : [], board.agents ?? [])
   return {
@@ -223,6 +224,8 @@ async function getBoard(): Promise<BoardView> {
     workers,
     ...derived,
     coordinatorLive,
+    canStart: config !== null && !coordinatorLive,
+    staleLinks: config ? staleSkillLinks() : [],
     repoColors: panel.repoColors ?? {},
     oncallLabel: panel.oncallLabel ?? 'oncall'
   }
@@ -310,12 +313,13 @@ async function openWorkspaceBoard(): Promise<{ opened: boolean; error?: string }
 export default function activate(orca: OrcaWorkerApi): void {
   settings = orca.settings
   host = orca.host
-  // Orca installed a new version of the plugin: bring the coordinator package up to date with it.
+  // Orca installed a new version of the plugin: refresh the plugin's own files (never agent config).
   void updateIfInstalledHere().catch(() => undefined)
 
   orca.panels.handle('setup.status', () => getSetupStatus(runOrca, host))
   orca.panels.handle('setup.run', (options) => runSetup(options ?? { workspace: '' }))
   orca.panels.handle('setup.start', () => startCoordinator())
+  orca.panels.handle('setup.updateLinks', () => updateLinks())
   orca.panels.handle('config.read', () => readSettings(runOrca, host))
   orca.panels.handle('config.save', ({ patch }) => saveSettings(patch))
   orca.panels.handle('config.removeRepo', ({ path: target }) => removeSkippedRepo(String(target ?? '')))

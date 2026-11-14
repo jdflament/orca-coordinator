@@ -334,6 +334,8 @@ function summary(config) {
     ['GitHub org', config.github.org || '(none)'],
     ['Repos', config.repos.map((r) => r.name).join(', ') || '(none)'],
     ['Tools', `detected by the coordinator at session start${a.ticketing.kind !== 'none' || a.chat.kind !== 'none' ? ` (CLI adapters for prechecks: ticketing ${a.ticketing.kind}, chat ${a.chat.kind})` : ''}, flags ${a.flags.kind}`],
+    ['Skill links', skillLinks(config).join(', ') || '(none)'],
+    ['Status line', config.agents.coordinator.statusline ? '~/.claude/settings.json (statusLine, backup kept)' : '(untouched)'],
     ['Automations', `${config.automations.enabled ? 'on' : 'off'} (${config.automations.timezone})`]
   ]
   return rows.map(([k, v]) => `  ${k.padEnd(12)} ${v}`).join('\n')
@@ -377,6 +379,7 @@ async function init() {
   if (opt('branch-pattern')) config.git.branchPattern = opt('branch-pattern')
   if (has('automations')) config.automations.enabled = true
   if (has('statusline')) config.agents.coordinator.statusline = true
+  if (has('no-statusline')) config.agents.coordinator.statusline = false
   if (opt('timezone')) config.automations.timezone = opt('timezone')
 
   // Show what was found; one Enter installs it, "e" walks through every question.
@@ -563,13 +566,25 @@ const SKILL_DIRS = [
   { agent: 'agents', dir: '~/.agents/skills/coordinator' }
 ]
 
+/**
+ * Links the skill into the agents' skills folders. Only what was asked for: --skill-agent <id>
+ * (repeatable), else the coordinator's own agent; --no-skill-link links nothing; --skill-dir <dir>
+ * adds a folder. A folder that merely exists is never linked into.
+ */
+function skillAgents(config) {
+  return new Set(has('no-skill-link') ? [] : opts('skill-agent').length ? opts('skill-agent') : [config.agents.coordinator.agent])
+}
+
+/** The folders installSkill will link into, as shown before the user confirms. */
+function skillLinks(config) {
+  const wanted = skillAgents(config)
+  return [...SKILL_DIRS.filter((entry) => wanted.has(entry.agent)).map((entry) => entry.dir), ...opts('skill-dir')]
+}
+
 function installSkill(config) {
   const target = path.join(PACKAGE_ROOT, 'skill', 'coordinator')
-  const wanted = new Set([config.agents.coordinator.agent, config.agents.worker.agent, ...opts('skill-dir')])
-  for (const entry of SKILL_DIRS) {
-    const parent = path.dirname(expandHome(entry.dir))
-    if (wanted.has(entry.agent) || fs.existsSync(parent)) symlink(target, expandHome(entry.dir))
-  }
+  const wanted = skillAgents(config)
+  for (const entry of SKILL_DIRS) if (wanted.has(entry.agent)) symlink(target, expandHome(entry.dir))
   for (const dir of opts('skill-dir')) symlink(target, expandHome(dir))
   if (wanted.has('codex')) did('note', `codex reads no skills folder: paste ${target}/SKILL.md into ~/.codex/AGENTS.md`)
 }
@@ -957,7 +972,9 @@ function usage() {
                       advanced (CLI adapters for shell prechecks; tools are detected otherwise):
                       --ticketing <kind> --ticketing-team --issue-url --chat <kind> --draft-only-channels a,b
                       --repo <path> (repeatable) | --no-repos
-                      --automations --statusline --timezone --skill-dir <dir> --no-plugin
+                      --automations --statusline | --no-statusline --timezone --no-plugin
+                      --skill-agent <claude|opencode|agents|codex> (repeatable; default: the coordinator's agent)
+                      --no-skill-link | --skill-dir <dir>
                       --config <file> --state <dir> --force
   render       rebuild COORDINATOR.md, playbooks/, panel.json and the bin wrappers from config
   tools        print the tools the coordinator recorded; --set "Linear:mcp,GitHub:gh" records them (names only)

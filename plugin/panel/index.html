@@ -171,6 +171,7 @@
       <header><span id="dot" class="dot"></span><strong>Coordinator</strong><span id="updated" class="meta">loading</span><button id="start" class="primary" hidden>Start coordinator</button><button id="more" class="icon" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"></button><div id="more-menu" class="menu" role="menu" hidden><button id="cleanup" role="menuitem" title="Shows what it would close and remove first; nothing changes until you confirm">Clean up finished workers…</button></div><button id="open" class="icon" title="Open coordinator"></button><button id="gear" class="icon" title="Settings" hidden></button></header>
       <div id="plan" class="plan" hidden></div>
       <div id="result" class="result"></div>
+      <div id="links" class="result" hidden></div>
       <section id="setup" class="setup" hidden></section>
       <section id="settings" class="settings" hidden></section>
       <div id="board">
@@ -463,8 +464,9 @@
         const workers = list(board.workers)
         const agents = list(board.agents)
         const busy = agents.filter((a) => a.state === 'working').length + workers.length
-        byId('start').hidden = board.coordinatorLive === true
+        byId('start').hidden = board.canStart !== true
         byId('open').hidden = board.coordinatorLive !== true
+        renderStaleLinks(board.staleLinks)
         byId('dot').className = board.coordinatorLive ? 'dot live' : 'dot'
         byId('dot').title = board.coordinatorLive ? 'coordinator live' : 'coordinator offline'
         byId('updated').textContent = 'updated ' + getAgo(board.updatedAt)
@@ -475,6 +477,24 @@
         byId('needs').replaceChildren(...section('Needs you', renderNeeds(board.decisions, workers)))
         byId('work').replaceChildren(...section('Work', renderWork(board), '', 'No work yet. The coordinator adds tickets and tasks here.'))
         byId('agents').replaceChildren(...linkHeading(section('Agents', renderAgents(agents, workers), busy ? busy + ' working' : '', 'No agents running.'), 'Open the Workspace Board', openBoard))
+      }
+
+      // After a plugin update: links that point at an older copy are only shown, never changed without the click.
+      function renderStaleLinks(paths) {
+        const stale = list(paths)
+        const node = byId('links')
+        node.hidden = stale.length === 0
+        if (stale.length === 0) return node.replaceChildren()
+        const update = button('Update links', async () => {
+          update.disabled = true
+          try {
+            await orca.plugin.request('setup.updateLinks')
+          } catch (error) {
+            showResult('Could not update the links: ' + error.message, [], true)
+          }
+          void refresh()
+        })
+        node.replaceChildren(el('span', 'trunc', 'The coordinator skill link is out of date: ' + stale.join(', ')), update)
       }
 
       function showResult(message, actions, isError) {
@@ -611,7 +631,7 @@
         setupShown = true
         showSetup(true)
         byId('updated').textContent = 'not set up'
-        const nodes = [el('h2', '', 'Set up the coordinator'), el('p', '', 'It gets its rules, its board and the coordinator skill for your agent in this Orca folder. Nothing is committed, pushed or posted.')]
+        const nodes = [el('h2', '', 'Set up the coordinator'), el('p', '', 'Pick what it may touch, then press the button. Nothing is committed, pushed or posted.')]
         if (!status.node) nodes.push(el('p', 'note', 'Node.js 20.6 or newer is needed on your PATH (nodejs.org), then reopen this panel.'))
         const workspaces = list(status.workspaces)
         if (workspaces.length === 0) {
@@ -621,8 +641,6 @@
         let workspace = workspaces[0]
         const form = el('div', 'form')
         const go = button('', () => void setup(), 'primary')
-        const label = () => { go.textContent = 'Set up in ' + workspace.name; go.title = workspace.path }
-        label()
         const errors = errorBox()
         const name = input(status.personName)
         name.placeholder = 'How the coordinator addresses you'
@@ -635,7 +653,27 @@
           return { repo, box: item.box }
         })
         if (repos.length === 0) checks.append(el('span', 'muted', 'No repositories in Orca yet'))
-        form.append(go)
+        // Only installed agents, only the coordinator's own preselected; every path that changes is listed below.
+        const agentChecks = el('div', 'checks')
+        const agentBoxes = list(status.agents).map((agent) => {
+          const item = checkbox(agent.name, agent.selected === true, agent.path)
+          item.node.title = agent.path
+          agentChecks.append(item.node)
+          return { agent, box: item.box }
+        })
+        if (agentBoxes.length === 0) agentChecks.append(el('span', 'muted', 'No supported agent found on this computer'))
+        const statusLine = status.statusLine?.available ? checkbox('Show the ◆ COORDINATOR badge in the Claude Code status line', false, status.statusLine.path + ' (statusLine, backup kept)') : null
+        const will = el('div', 'helper')
+        const label = () => {
+          go.textContent = 'Set up in ' + workspace.name
+          go.title = workspace.path
+          const linked = agentBoxes.filter(({ box }) => box.checked).map(({ agent }) => 'Link the skill: ' + agent.path)
+          const edited = statusLine?.box.checked ? ['Edit ' + status.statusLine.path + ' (statusLine)'] : []
+          will.replaceChildren(el('div', '', 'This will:'), ...[...linked, ...edited, 'Write its own files: ' + list(status.ownPaths).join(', ')].map((line) => el('div', '', '• ' + line)), el('div', '', 'Nothing else in your agents\' config changes. Next: press Start coordinator in this panel.'))
+        }
+        label()
+        agentBoxes.forEach(({ box }) => { box.onchange = label })
+        if (statusLine) statusLine.box.onchange = label
         if (workspaces.length > 1) {
           const change = el('label', 'change')
           const picker = select(workspaces.map((w) => ({ value: w.path, label: w.name })), workspace.path)
@@ -647,7 +685,9 @@
           change.append(el('span', '', 'Change folder'), picker)
           form.append(change)
         }
-        form.append(field('Your name', name), field('Repositories', checks, true), el('div', 'helper', 'The coordinator can start workers in the checked repositories.'))
+        form.append(field('Your name', name), field('Repositories', checks, true), field('Agents', agentChecks, true))
+        if (statusLine) form.append(statusLine.node)
+        form.append(will, go)
         nodes.push(form, errors)
         byId('setup').replaceChildren(...nodes)
         byId('setup').querySelectorAll('button, input, select').forEach((node) => { node.disabled = !status.node })
@@ -661,7 +701,10 @@
           const options = {
             workspace: workspace.path,
             name: name.value.trim(),
-            repos: boxes.filter(({ box }) => box.checked).map(({ repo }) => repo.path)
+            repos: boxes.filter(({ box }) => box.checked).map(({ repo }) => repo.path),
+            agents: agentBoxes.filter(({ box }) => box.checked).map(({ agent }) => agent.id),
+            statusLine: statusLine?.box.checked === true,
+            confirmed: true
           }
           try {
             const result = await orca.plugin.request('setup.run', options)

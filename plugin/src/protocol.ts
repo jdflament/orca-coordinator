@@ -122,6 +122,10 @@ export interface BoardView extends Board {
   /** Derived per configured repo; a row a board task already covers (same repo and branch) is left out. */
   localWork: LocalWork[]
   coordinatorLive: boolean
+  /** Set up and not running: the only state in which the panel shows "Start coordinator". */
+  canStart: boolean
+  /** Skill links that point at another copy of the package: the panel offers "Update links". */
+  staleLinks: string[]
   repoColors: Record<string, string>
   oncallLabel: string
 }
@@ -152,6 +156,21 @@ export interface SetupStatus {
   repos: SetupRepo[]
   /** git config user.name, to prefill the name. */
   personName: string
+  /** Installed agents the skill can be linked into; only the coordinator's own is selected. */
+  agents: SetupAgent[]
+  coordinatorAgent: string
+  /** The Claude Code settings file the optional status line badge edits. */
+  statusLine: { path: string; available: boolean }
+  /** The plugin's own folders setup writes (shown with the paths it links or edits). */
+  ownPaths: string[]
+}
+
+/** An agent setup can link the coordinator skill into: path is the exact link it would create. */
+export interface SetupAgent {
+  id: string
+  name: string
+  path: string
+  selected: boolean
 }
 
 /** The setup form. Fields left out keep init's detection; repos: [] watches none. */
@@ -159,6 +178,12 @@ export interface SetupOptions {
   workspace: string
   name?: string
   repos?: string[]
+  /** Agent ids whose skills folder gets the link; none given = none linked. */
+  agents?: string[]
+  /** Edit statusLine in ~/.claude/settings.json (the ◆ COORDINATOR badge). */
+  statusLine?: boolean
+  /** The user pressed the button on the screen that showed the paths; without it nothing is written. */
+  confirmed?: boolean
 }
 
 export interface ConfigRepo {
@@ -236,10 +261,12 @@ declare module 'orca' {
     /** Brings a terminal to the front (the coordinator's when none is given). */
     'board.switch': { input: { terminal?: string }; output: { switched: boolean } }
     'setup.status': { output: SetupStatus }
-    /** Checks the form, copies the package to its stable home and runs init with the answers. */
+    /** Needs confirmed: true. Copies the package to its stable home and runs init with the answers: links only the chosen agents. */
     'setup.run': { input: SetupOptions; output: { ok: boolean; output: string } }
     /** Starts the coordinator agent in the configured workspace, in a terminal, focused. */
     'setup.start': { output: { started: boolean; output: string } }
+    /** Re-points existing skill links that are stale; creates no new link and edits no settings. */
+    'setup.updateLinks': { output: { updated: string[] } }
     /** The user's config.yaml, merged with defaults, plus its problems and the choices. */
     'config.read': { output: ConfigRead }
     /** Removes one repos entry that is not a git repository from config.yaml (read back to check), then renders. */
