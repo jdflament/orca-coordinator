@@ -89,9 +89,11 @@ async function writeWorkerTerminals(workers: OrcaWorker[]): Promise<void> {
   if ((await readFile(file, 'utf8').catch(() => null)) !== text) await writeFile(file, text)
 }
 
-function getActiveWorkers({ workers, titleOf }: Awaited<ReturnType<typeof listWorkers>>): LiveWorker[] {
+function getActiveWorkers({ workers, titleOf }: Awaited<ReturnType<typeof listWorkers>>, coordinator: string): LiveWorker[] {
+  // A finished worker whose terminal is still open is listed as idle, so it can be closed from the panel.
+  const isOpenFinished = (worker: OrcaWorker) => FINISHED_STATES.includes(String(worker.state)) && worker.terminalState === 'retained' && Boolean(worker.terminal) && worker.terminal !== coordinator
   return workers
-    .filter((worker) => !FINISHED_STATES.includes(String(worker.state)))
+    .filter((worker) => !FINISHED_STATES.includes(String(worker.state)) || isOpenFinished(worker))
     .map((worker) => {
       const state = String(worker.state)
       const outcome = String(worker.outcome ?? '')
@@ -104,6 +106,24 @@ function getActiveWorkers({ workers, titleOf }: Awaited<ReturnType<typeof listWo
         needsInput
       }
     })
+}
+
+/**
+ * Closes a worker session through Orca (worker-release). Only an idle or finished-but-open
+ * worker: a working one, one that needs input, the coordinator's own terminal and unknown ids are refused.
+ */
+async function closeSession(dispatchId: string): Promise<{ closed: boolean }> {
+  if (!dispatchId) throw invalid('dispatchId is required')
+  const { workers } = await listWorkers()
+  const worker = workers.find((w) => String(w.dispatchId) === dispatchId)
+  if (!worker) throw invalid(`no worker session ${dispatchId}`)
+  const coordinator = await getCoordinatorHandle().catch(() => '')
+  if (coordinator && worker.terminal === coordinator) throw invalid('the coordinator is never closed')
+  const finished = FINISHED_STATES.includes(String(worker.state))
+  const needsInput = /input|blocked|question|escalat/i.test(`${worker.state} ${worker.outcome ?? ''}`)
+  if (!finished && getWorkerStatus(String(worker.state), String(worker.outcome ?? ''), needsInput) !== 'idle') throw invalid(`${dispatchId} is working: stop it first`)
+  await runOrca(['orchestration', 'worker-release', '--dispatch', dispatchId])
+  return { closed: true }
 }
 
 // ---- local work derived from the configured repos' git state ----
@@ -214,7 +234,7 @@ async function getBoard(): Promise<BoardView> {
   const [list, coordinatorLive] = await Promise.all([listWorkers().catch(() => null), handle ? getIsCoordinatorLive(handle).catch(() => false) : Promise.resolve(false)])
   const config = await getConfig().catch(() => null)
   const derived = await getDerivedWork(board).catch(() => ({ localWork: [] }))
-  const { workers, agents } = mergeBoardAgents(list ? getActiveWorkers(list) : [], board.agents ?? [])
+  const { workers, agents } = mergeBoardAgents(list ? getActiveWorkers(list, handle) : [], board.agents ?? [])
   return {
     ...board,
     decisions: withLinkHosts(board.decisions),
@@ -399,6 +419,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
 
   orca.panels.handle('board.remove', ({ kind, id }) => removeBoardItem(kind, String(id ?? '')))
+  orca.panels.handle('board.closeSession', ({ dispatchId }) => closeSession(String(dispatchId ?? '')))
   orca.panels.handle('board.restore', ({ removal }) => restoreBoardItem(removal))
   orca.panels.handle('board.cleanup', async (input) => runCleanup(await stateDir(), input?.dryRun === true))
 

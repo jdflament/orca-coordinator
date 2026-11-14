@@ -1087,3 +1087,47 @@ test('board.get canStart: Start coordinator shows only when set up and not runni
     })
   })
 })
+
+// board.closeSession: an idle or finished-but-open worker is released through Orca; nothing else is.
+const SESSIONS = [
+  { dispatchId: 'ctx_run', state: 'running', outcome: 'in_progress', terminal: 'term_w1', taskId: 'task_1' },
+  { dispatchId: 'ctx_done', state: 'succeeded', outcome: 'succeeded', terminalState: 'retained', terminal: 'term_w2', taskId: 'task_2' },
+  { dispatchId: 'ctx_self', state: 'succeeded', outcome: 'succeeded', terminalState: 'retained', terminal: 'term_coord', taskId: 'task_3' }
+]
+const releases = (log: string) => readFileSync(log, 'utf8').split('\n').filter((line) => line.startsWith('orchestration worker-release'))
+
+test('board.closeSession: releases a finished-but-open session once; board.get lists it as idle before and not after', async () => {
+  await withFakeOrca(true, async (log) => {
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
+    const before = (await worker.request('board.get')) as { workers: { dispatchId: string; status: string }[] }
+    assert.deepEqual(before.workers.map((w) => [w.dispatchId, w.status]), [['ctx_run', 'working'], ['ctx_done', 'idle']], 'the coordinator terminal is never listed')
+    assert.deepEqual(await worker.request('board.closeSession', { dispatchId: 'ctx_done' }), { closed: true })
+    assert.deepEqual(releases(log), ['orchestration worker-release --dispatch ctx_done'])
+    await worker.deactivate()
+  }, undefined, SESSIONS)
+})
+
+test('board.closeSession refuses a working worker, the coordinator terminal and unknown ids: no release', async () => {
+  await withFakeOrca(true, async (log) => {
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
+    await assert.rejects(worker.request('board.closeSession', { dispatchId: 'ctx_run' }), /working/)
+    await assert.rejects(worker.request('board.closeSession', { dispatchId: 'ctx_self' }), /coordinator/)
+    await assert.rejects(worker.request('board.closeSession', { dispatchId: 'ctx_nope' }), /no worker session/)
+    assert.deepEqual(releases(log), [])
+    await worker.deactivate()
+  }, undefined, SESSIONS)
+})
+
+test('board.closeSession: when Orca fails to release, the request rejects and the session stays listed', async () => {
+  await withFakeOrca(true, async (log) => {
+    const bin = process.env.ORCA_CLI_BIN_DIR as string
+    const script = readFileSync(join(bin, 'orca'), 'utf8').replace('case "$1 $2" in', 'case "$1 $2" in\n  "orchestration worker-release") echo "release failed" >&2; exit 1 ;;')
+    writeFileSync(join(bin, 'orca'), script)
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
+    await assert.rejects(worker.request('board.closeSession', { dispatchId: 'ctx_done' }), /release failed|Command failed/)
+    const view = (await worker.request('board.get')) as { workers: { dispatchId: string }[] }
+    assert.ok(view.workers.some((w) => w.dispatchId === 'ctx_done'), 'row kept')
+    assert.equal(releases(log).length, 1, 'tried once, no retry')
+    await worker.deactivate()
+  }, undefined, SESSIONS)
+})

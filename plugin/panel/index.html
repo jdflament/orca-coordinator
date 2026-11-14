@@ -59,6 +59,7 @@
       .result summary { padding: 0; color: inherit; }
       .result .actions-list { margin-top: 2px; font-size: 11px; }
       .result > button { position: absolute; right: 6px; top: 4px; }
+      .result > button.inline { position: static; flex: none; }
 
       .notice { display: flex; gap: 8px; align-items: center; padding: 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
       .notice span { flex: 1; min-width: 0; }
@@ -92,7 +93,7 @@
       .trunc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .meta-text { color: color-mix(in srgb, var(--muted) 70%, transparent); font-size: 11px; }
       .act { visibility: hidden; }
-      .row:hover .act, .wk:hover .act, .feature:hover .act, .act.keep { visibility: visible; }
+      .row:hover .act, .wk:hover .act, .feature:hover .act, .wrow:hover .act, .act.keep { visibility: visible; }
       .repo { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; flex: none; max-width: 35%; overflow: hidden; }
       .fixed { flex: none; overflow: visible; }
       .repo i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
@@ -380,6 +381,10 @@
         title.style.flex = '0 1 auto'
         node.append(...(worker.repo ? [repoLabel(worker.repo)] : []), title, el('span', 'meta-text trunc grow', worker.detail), state(worker.status))
         if (worker.terminal) node.onclick = () => orca.plugin.request('board.switch', { terminal: worker.terminal })
+        if (worker.status === 'idle') {
+          const close = iconButton('x', 'Close session ' + worker.title, (event) => { event.stopPropagation(); confirmClose(worker) })
+          node.append(close)
+        }
         return node
       }
 
@@ -404,7 +409,7 @@
             node.replaceChildren()
             await orca.plugin.request('board.restore', { removal }).catch((error) => showResult('Could not restore ' + id + ': ' + error.message, [], true))
             refresh()
-          }))
+          }, 'inline'))
           clearTimeout(undoTimer)
           undoTimer = setTimeout(() => node.replaceChildren(), 6000)
         } catch (error) {
@@ -413,6 +418,20 @@
         refresh()
       }
       const removeButton = (kind, id) => iconButton('x', 'Remove ' + id + ' from the board', () => removeItem(kind, id))
+      // A closed session cannot come back, so it asks first (one line) instead of offering Undo.
+      function confirmClose(worker) {
+        const node = byId('result')
+        node.className = 'result'
+        node.replaceChildren(
+          el('span', 'trunc grow', 'Close session ' + worker.title + '? It cannot be restored.'),
+          button('Close', async () => {
+            node.replaceChildren()
+            await orca.plugin.request('board.closeSession', { dispatchId: worker.dispatchId }).catch((error) => showResult('Could not close ' + worker.title + ': ' + error.message, [], true))
+            refresh()
+          }, 'inline'),
+          button('Cancel', () => node.replaceChildren(), 'inline')
+        )
+      }
       function noteSpan(notes) {
         const node = el('span', 'note trunc grow', notes)
         node.title = text(notes)
@@ -493,7 +512,7 @@
         // board.get already merged each board agent into its live worker (same id, else name = title).
         const workers = list(board.workers)
         const agents = list(board.agents)
-        const busy = agents.filter((a) => a.state === 'working').length + workers.length
+        const busy = agents.filter((a) => a.state === 'working').length + workers.filter((w) => w.status !== 'idle').length
         byId('start').hidden = board.canStart !== true
         byId('open').hidden = board.coordinatorLive !== true
         renderStaleLinks(board.staleLinks)
