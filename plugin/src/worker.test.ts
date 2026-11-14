@@ -1083,6 +1083,10 @@ test('board.get canStart: Start coordinator shows only when set up and not runni
     await withFakeOrca(true, async () => {
       const worker = await mount(home)
       assert.equal((await worker.request('board.get')).canStart, false, 'running')
+      await worker.deactivate()
+    })
+  })
+})
 
 /** A fake agent CLI on PATH: `<name> models` prints `output` (or fails when null). */
 async function withFakeAgent<T>(name: string, output: string | null, run: () => Promise<T>): Promise<T> {
