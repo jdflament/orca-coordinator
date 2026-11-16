@@ -37,7 +37,12 @@ function mountPanel(handlers, made = [], timers = { setTimeout() {}, clearTimeou
       }
     }
   }
-  const context = { orca, document: { getElementById: byId, addEventListener() {}, createElement: (tag) => { const node = element(); node.tag = tag; made.push(node); return node }, body: element() }, window: {}, setInterval() {}, setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout, console, Set, Map }
+  // A browser throws when a window timer is called as a method of another object; emulate that so detached use cannot pass in Node.
+  const browserLike = (fn) => function (...args) {
+    if (this !== undefined && this !== context && this !== context.window) throw new TypeError('Illegal invocation')
+    return fn(...args)
+  }
+  const context = { orca, document: { getElementById: byId, addEventListener() {}, createElement: (tag) => { const node = element(); node.tag = tag; made.push(node); return node }, body: element() }, window: {}, setInterval() {}, setTimeout: browserLike(timers.setTimeout), clearTimeout: browserLike(timers.clearTimeout), console, Set, Map }
   context.window = context
   vm.runInNewContext(script, context)
   return { calls, byId }
@@ -73,6 +78,13 @@ test('closing an idle session asks in its own row (not in the top banner) and cl
   assert.ok(made.some((n) => /Close session\?/.test(n.textContent)), 'the question is a row element')
   await close.onclick()
   assert.equal(JSON.stringify(panel.calls.filter((c) => c.name === 'board.closeSession').map((c) => c.params)), '[{"dispatchId":"ctx_1"}]')
+})
+
+test('the refresh path never calls window timers detached from the window (browser: "Illegal invocation")', async () => {
+  const panel = mountPanel({ 'setup.status': () => ({ configured: true }), 'board.get': () => ({ coordinatorLive: true, liveReady: true }) })
+  await settle()
+  assert.doesNotMatch(String(panel.byId('updated').textContent), /Illegal invocation|Could not/)
+  assert.equal(panel.byId('dot').title, 'coordinator live')
 })
 
 // A controllable clock: timers run only when the test fires them.
