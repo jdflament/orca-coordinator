@@ -276,8 +276,8 @@ declare module 'orca' {
   interface PluginRequests {
     /** seen: the Needs you ids this panel session already showed ("d:<decision id>", "w:<dispatch id>"); items outside it come back with isNew. Omitted on the first load. */
     'board.get': { input: { seen?: string[] }; output: BoardView }
-    /** Types text + Enter into the coordinator terminal, or queues it in inbox.jsonl when offline. */
-    'board.send': { input: { text: string }; output: { sent: boolean; queued: boolean } }
+    /** Focuses the coordinator terminal, types text + Enter into it, or queues it in inbox.jsonl when it is not running. */
+    'board.send': { input: { text: string }; output: { sent: boolean; queued: boolean; focused?: boolean } }
     /** Runs <coordinatorDir>/bin/cleanup (dryRun: with -n, changing nothing) and returns its summary line and actions. */
     /** Removes a task (id), workstream (id) or agent (name) through bin/board. Rejects the coordinator and an agent that is working. */
     'board.remove': { input: { kind: BoardRemoveKind; id: string }; output: BoardRemoval }
