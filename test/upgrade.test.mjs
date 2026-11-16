@@ -40,23 +40,40 @@ test('fixtures exist for the released versions', () => {
 })
 
 for (const tag of TAGS) {
-  test(`upgrade from ${tag}: board verbs read the old board, keep every item, and never rewrite a current-version board`, () => {
-    const { box, boardFile, read } = install(tag)
-    const original = read(boardFile)
+  test(`upgrade from ${tag}: the board keeps every item, shows no focus/instructions/log after the update, archives their text, and a second read changes nothing`, () => {
+    const { box, stateDir, boardFile, read } = install(tag)
+    const before = JSON.parse(read(boardFile))
+    assert.ok(before.focus && before.instructions.length, 'the fixture holds retired content')
     const shown = box.run(BOARD, ['show', '--json'])
     assert.equal(shown.status, 0, shown.err)
-    const before = JSON.parse(original)
     const after = JSON.parse(shown.out)
-    for (const key of ['focus', 'instructions', 'decisions', 'workstreams', 'tasks', 'repos', 'agents']) assert.deepEqual(after[key], before[key], key)
-    assert.equal(read(boardFile), original, 'reading does not write')
+    for (const key of ['decisions', 'workstreams', 'tasks', 'repos', 'agents']) assert.deepEqual(after[key], before[key], key)
+    assert.equal(after.focus, '')
+    assert.deepEqual(after.instructions, [])
+    assert.deepEqual(after.log, [])
+    assert.equal(after.version, BOARD_VERSION)
+    // Nothing lost: the archive holds the focus, every instruction and the log; the original is backed up once.
+    const archives = fs.readdirSync(path.join(stateDir, 'archive')).map((f) => read(path.join(stateDir, 'archive', f))).join('\n')
+    assert.ok(archives.includes(`focus: ${before.focus}`))
+    for (const i of before.instructions) assert.ok(archives.includes(i.text), i.text)
+    for (const e of before.log) assert.ok(archives.includes(e.text), e.text)
+    assert.equal(fs.existsSync(`${boardFile}.bak-v${before.version}`), true)
     assert.equal(box.run(BOARD, ['validate']).status, 0)
-    // A write keeps what was there and adds to it.
+    // Second run: no rewrite, no second archive entry.
+    const settled = read(boardFile)
+    const archiveBefore = archives
+    assert.equal(box.run(BOARD, ['show', '--json']).status, 0)
+    assert.equal(box.run(COORDINATOR, ['migrate']).status, 0)
+    assert.equal(read(boardFile), settled)
+    assert.equal(fs.readdirSync(path.join(stateDir, 'archive')).map((f) => read(path.join(stateDir, 'archive', f))).join('\n'), archiveBefore)
+    // Writes keep working; the retired verbs are accepted and store nothing visible.
     assert.equal(box.run(BOARD, ['task:add', 'PROJ-9', '--repo', 'api', '--status', 'local']).status, 0)
+    for (const args of [['focus', 'new focus'], ['instruction:add', 'new rule'], ['instruction:set', 'i1', '--status', 'done']]) assert.equal(box.run(BOARD, args).status, 0, args[0])
     const written = JSON.parse(read(boardFile))
     assert.deepEqual(written.tasks.map((t) => t.id), [...before.tasks.map((t) => t.id), 'PROJ-9'])
-    assert.equal(written.version, BOARD_VERSION)
-    assert.deepEqual(written.instructions, before.instructions)
-    assert.equal(fs.existsSync(`${boardFile}.bak-v${BOARD_VERSION}`), false)
+    assert.equal(written.focus, '')
+    assert.deepEqual(written.instructions, [])
+    assert.doesNotMatch(read(path.join(stateDir, 'board.md')), /new focus|new rule|Instructions|Focus/)
   })
 
   test(`upgrade from ${tag}: config reads, keeps its values and unknown keys, and migrates once with one backup`, () => {
@@ -110,7 +127,7 @@ for (const tag of TAGS) {
     const first = box.run(COORDINATOR, ['migrate'])
     assert.equal(first.status, 0, first.err)
     assert.match(first.out, stored < CONFIG_VERSION ? new RegExp(`config: migrated v${stored} → v${CONFIG_VERSION}`) : /config: up to date/)
-    assert.match(first.out, /board: up to date/)
+    assert.match(first.out, /board: (up to date|migrated)/)
     const second = box.run(COORDINATOR, ['migrate'])
     assert.match(second.out, /config: up to date/)
     const before = read(box.configPath)
@@ -186,7 +203,7 @@ test('migration mechanism: newer data is left alone, a broken file or a refused 
 test('board verbs: a board whose lists are null or the wrong type reads as empty lists and keeps its unknown keys', () => {
   const box = sandbox({ writeConfig: false })
   const file = path.join(box.dir, 'board.json')
-  fs.writeFileSync(file, JSON.stringify({ version: 2, updatedAt: '2026-01-01T00:00:00.000Z', decisions: null, tasks: {}, extra: { keep: true } }))
+  fs.writeFileSync(file, JSON.stringify({ version: 3, updatedAt: '2026-01-01T00:00:00.000Z', decisions: null, tasks: {}, extra: { keep: true } }))
   const env = { COORDINATOR_BOARD: file }
   assert.equal(box.run(BOARD, ['task:add', 'A-1', '--status', 'local'], { extraEnv: env }).status, 0)
   const board = JSON.parse(fs.readFileSync(file, 'utf8'))

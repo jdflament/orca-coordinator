@@ -2,11 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "board.schema.json",
   "title": "Coordinator board",
-  "description": "The file the Orca panel reads and bin/board.mjs writes. Version 2.",
+  "description": "The file the Orca panel reads and bin/board.mjs writes. Version 3.",
   "type": "object",
   "required": ["version", "updatedAt", "decisions", "workstreams", "tasks", "repos", "agents", "log"],
   "properties": {
-    "version": { "const": 2 },
+    "version": { "const": 3 },
     "focus": { "type": "string", "description": "One line: what the coordinator is on right now." },
     "updatedAt": { "type": "string", "description": "ISO timestamp, bumped on every write." },
     "seq": { "type": "object", "description": "Id counters (decision, instruction).", "additionalProperties": { "type": "integer" } },

@@ -198,7 +198,7 @@ function mergeBoardAgents(workers: LiveWorker[], agents: NonNullable<Board['agen
 }
 
 /** The board.json version this build reads (bin/lib/migrate.mjs BOARD_VERSION; a test keeps them equal). */
-export const BOARD_VERSION = 2
+export const BOARD_VERSION = 3
 
 /** What is wrong with a stored file that exists, in words the user can act on; '' when it is fine or absent. */
 async function describeStored(file: string, newerThan?: number): Promise<string> {
