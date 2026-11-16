@@ -134,6 +134,8 @@ export interface BoardView extends Board {
   staleLinks: string[]
   repoColors: Record<string, string>
   oncallLabel: string
+  /** Stored files the panel could not read (unparseable, or written by a newer version): shown as a recoverable notice, never a dead panel. */
+  dataProblems: string[]
 }
 
 /** An Orca workspace the coordinator can be set up in. */

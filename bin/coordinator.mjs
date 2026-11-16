@@ -496,6 +496,16 @@ function runBoard(config, args) {
   return result.stdout
 }
 
+const RENDERED_VERSION_FILE = '.rendered-version'
+
+function packageVersion() {
+  try {
+    return String(JSON.parse(fs.readFileSync(path.join(PACKAGE_ROOT, 'package.json'), 'utf8')).version || '')
+  } catch {
+    return ''
+  }
+}
+
 function renderAll(config) {
   const values = { ...templateValues(config), today: today() }
   const state = config.paths.state
@@ -529,6 +539,9 @@ function renderAll(config) {
   const recorded = readPanelJson(state)
   const kept = Object.fromEntries(['tools', 'detectedAt'].filter((key) => key in recorded).map((key) => [key, recorded[key]]))
   writeFile(path.join(state, 'panel.json'), JSON.stringify({ repoColors: config.board.repoColors || {}, oncallLabel: config.board.oncallLabel || '', ...kept }, null, 2) + '\n')
+
+  // Which release rendered this state: the plugin update compares it with the package version and re-renders when they differ.
+  writeFile(path.join(state, RENDERED_VERSION_FILE), `${packageVersion()}\n`)
 
   // Wrappers: short scripts the rules, the panel and the human call by a fixed name.
   const pkg = PACKAGE_ROOT

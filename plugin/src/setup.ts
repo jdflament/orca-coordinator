@@ -462,14 +462,34 @@ export async function migrateStored(): Promise<{ ok: boolean; output: string }> 
  */
 export async function updateIfInstalledHere(): Promise<{ updated: boolean; output?: string }> {
   // Stored data first, whether or not the home is stale: this plugin's own CLI migrates config.yaml and
-  // board.json (backup once, idempotent). Migrations are the only thing that ever rewrites the user's config here.
+  // board.json (backup once, idempotent). Migrations are the only thing that ever rewrite the user's config here.
   await migrateStored()
-  if (!existsSync(configFile()) || isSynced()) return { updated: false }
+  if (!existsSync(configFile())) return { updated: false }
   const config = await readConfig()
-  if (!config || path.resolve(config.paths.package) !== path.resolve(homeDir())) return { updated: false }
+  if (!config) return { updated: false }
+  // The configured package is this plugin's home, or a copy that no longer exists (an Orca version folder that was removed):
+  // config.yaml is never edited for that; render runs from this plugin's own package, so the wrappers point here for this run and every later one.
+  const configured = path.resolve(config.paths.package)
+  const home = path.resolve(homeDir())
+  const dead = configured !== home && !existsSync(path.join(configured, 'bin', 'coordinator.mjs'))
+  if (configured !== home && !dead) return { updated: false }
+  // Stale = a different folder, or the same folder at another version than the one that rendered the state (an update in place).
+  const rendered = readRenderedVersion(config.paths.state)
+  const current = versionOf(PACKAGE_DIR)
+  if (isSynced() && rendered === current) return { updated: false }
   const node = await findNode()
   if (!node) return { updated: false }
-  syncPackage()
-  const result = await run(node, [path.join(homeDir(), 'bin', 'coordinator.mjs'), 'render'], { timeout: 60000 })
+  syncPackage(true)
+  const cli = path.join(home, 'bin', 'coordinator.mjs')
+  const result = await run(node, [cli, 'render'], { timeout: 60000 })
   return { updated: result.ok, output: result.output }
+}
+
+/** The release that last rendered the state folder (render writes it); '' when unknown, which counts as stale. */
+function readRenderedVersion(state: string): string {
+  try {
+    return readFileSync(path.join(expandHome(state), '.rendered-version'), 'utf8').trim()
+  } catch {
+    return ''
+  }
 }
