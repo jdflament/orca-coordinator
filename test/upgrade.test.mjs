@@ -255,3 +255,10 @@ test('migration v4: board.retentionHours is added to a board block, a new block 
   assert.equal(run('c.yaml', 'schemaVersion: 3\nboard:\n  retentionHours: 0\n'), 'schemaVersion: 4\nboard:\n  retentionHours: 0\n', '0 (keep) is a user choice')
   assert.match(run('d.yaml', 'schemaVersion: 3\nboard: {oncallLabel: P1}\n'), /retentionHours: 24/)
 })
+
+test('panel: the board shows only structured sections; free text (focus line, standing instructions) is never rendered', () => {
+  const html = fs.readFileSync(path.join(ROOT, 'plugin', 'panel', 'index.html'), 'utf8')
+  const board = /<div id="board">([\s\S]*?)<\/div>/.exec(html)?.[1] ?? ''
+  assert.deepEqual([...board.matchAll(/<section id="(\w+)"/g)].map((m) => m[1]), ['needs', 'work', 'agents'])
+  assert.ok(!/board\.(focus|instructions|log)\b/.test(html), 'the panel does not read the free-text board fields')
+})

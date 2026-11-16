@@ -64,9 +64,6 @@
       .notice { display: flex; gap: 8px; align-items: center; padding: 6px 12px; font-size: 12px; color: var(--muted); border-bottom: 1px solid var(--line); }
       .notice span { flex: 1; min-width: 0; }
 
-      .focus { color: var(--muted); padding: 8px 12px 0; }
-      .focus:empty { display: none; }
-
       /* Section headers: px-3 pt-2, 10px semibold uppercase tracking-wider muted. */
       h2 { font-size: 10px; line-height: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); margin: 0; padding: 12px 12px 4px; display: flex; gap: 6px; }
       h2.link { cursor: pointer; }
@@ -213,8 +210,6 @@
       <section id="setup" class="setup" hidden></section>
       <section id="settings" class="settings" hidden></section>
       <div id="board">
-        <div id="focus" class="focus trunc"></div>
-        <section id="instructions"></section>
         <section id="needs"></section>
         <section id="work"></section>
         <section id="agents"></section>
@@ -454,10 +449,6 @@
           byId('updated').textContent = 'failed: ' + error.message
           return false
         }
-      }
-
-      function renderInstructions(instructions) {
-        return list(instructions).filter((i) => i.status !== 'done').map((i) => el('div', 'item trunc', i.text))
       }
 
       function renderDecision(decision, tag) {
@@ -726,11 +717,8 @@
         guard(() => renderDataProblems(board.dataProblems))
         guard(() => {
           byId('updated').textContent = 'updated ' + getAgo(board.updatedAt)
-          byId('focus').textContent = text(board.focus)
-          byId('focus').title = text(board.focus)
         })
         lastBoard = board
-        fill('instructions', 'Instructions', () => section('Instructions', renderInstructions(board.instructions)))
         fill('needs', 'Needs you', () => {
           const pending = pendingNeeds(board.decisions, workers)
           return section('Needs you', renderNeeds(pending), pending.length ? String(pending.length) : '')
