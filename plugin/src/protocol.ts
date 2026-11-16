@@ -28,8 +28,6 @@ interface BoardDecision {
   settlesWhen?: 'pr-merged' | 'pr-closed' | 'pr-reviewed'
   /** Added by board.get from `seen`: not in the ids the panel already showed. */
   isNew?: boolean
-  /** Added by board.get from the viewer's stored seen ids: not looked at yet, even in an earlier panel session. */
-  unseen?: boolean
   /** Added by board.get from url. */
   linkHost?: LinkHost
 }
@@ -110,8 +108,6 @@ export interface LiveWorker {
   needsInput: boolean
   /** Added by board.get from `seen`: not in the ids the panel already showed. */
   isNew?: boolean
-  /** As on a decision: not looked at yet, even in an earlier panel session. */
-  unseen?: boolean
   /** From the board agent that is the same work (see board.get), when there is one. */
   repo?: string
   detail?: string
@@ -280,8 +276,6 @@ declare module 'orca' {
   interface PluginRequests {
     /** seen: the Needs you ids this panel session already showed ("d:<decision id>", "w:<dispatch id>"); items outside it come back with isNew. Omitted on the first load. */
     'board.get': { input: { seen?: string[] }; output: BoardView }
-    /** The viewer looked at these Needs you items ("d:<id>", "w:<dispatch id>"): their `unseen` mark clears, kept in the plugin's storage. */
-    'board.markSeen': { input: { ids: string[] }; output: { marked: number } }
     /** Types text + Enter into the coordinator terminal, or queues it in inbox.jsonl when offline. */
     'board.send': { input: { text: string }; output: { sent: boolean; queued: boolean } }
     /** Runs <coordinatorDir>/bin/cleanup (dryRun: with -n, changing nothing) and returns its summary line and actions. */

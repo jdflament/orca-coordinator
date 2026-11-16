@@ -110,8 +110,6 @@
       .is-new { animation: arrive 4s ease-out; border-radius: var(--radius-sm); }
       @keyframes arrive { from { background: color-mix(in srgb, var(--primary) 22%, transparent); box-shadow: inset 2px 0 0 var(--primary); } to { background: transparent; box-shadow: inset 2px 0 0 transparent; } }
       @media (prefers-reduced-motion: reduce) { .is-new { animation: none; background: color-mix(in srgb, var(--primary) 12%, transparent); } }
-      /* Not looked at yet (kept across sessions): a small accent dot before the title; it goes once the item is hovered, focused or clicked. */
-      .unseen-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
       .item .top { display: flex; align-items: center; gap: 8px; min-width: 0; white-space: nowrap; }
       .item .verb { margin-left: auto; color: var(--muted); font-size: 11px; flex: none; }
       .item .what { color: var(--muted); margin: 2px 0 6px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
@@ -447,29 +445,13 @@
         return list(instructions).filter((i) => i.status !== 'done').map((i) => el('div', 'item trunc', i.text))
       }
 
-      // Marks a Needs you item seen when the viewer hovers, focuses or clicks it: the dot goes, and the worker keeps it gone.
-      function watchUnseen(node, key, item) {
-        if (item.unseen !== true) return []
-        const dot = el('span', 'unseen-dot')
-        dot.title = 'New'
-        let done = false
-        const seen = () => {
-          if (done) return
-          done = true
-          dot.remove()
-          request('board.markSeen', { ids: [key] }).catch(() => { done = false })
-        }
-        for (const event of ['pointerenter', 'focusin', 'click']) node.addEventListener(event, seen)
-        return [dot]
-      }
-
       function renderDecision(decision, tag) {
         const answered = decision.status === 'answered'
         const card = el('div', decision.isNew ? 'item is-new' : 'item')
         const top = el('div', 'top')
         // The verb is shown only when no button already says it.
         const said = list(decision.options).some((option) => text(option?.label ?? option?.id ?? option).toLowerCase() === text(decision.action).toLowerCase())
-        top.append(...watchUnseen(card, 'd:' + decision.id, decision), ...(tag ? [repoLabel(decision.repo)] : []), link(decision.title || decision.id, decision.url, 'trunc grow', decision.linkHost), ...oncallBadge(decision), ...(said ? [] : [el('span', 'verb', decision.action)]))
+        top.append(...(tag ? [repoLabel(decision.repo)] : []), link(decision.title || decision.id, decision.url, 'trunc grow', decision.linkHost), ...oncallBadge(decision), ...(said ? [] : [el('span', 'verb', decision.action)]))
         const actions = el('div', 'actions')
         const sent = (decisionLockedUntil.get(decision.id) ?? 0) > Date.now()
         const sentNote = el('span', 'muted', 'sent')
@@ -500,7 +482,7 @@
         const node = el('div', worker.isNew ? 'wrow is-new' : 'wrow')
         const title = el('span', 'trunc', worker.title)
         title.style.flex = '0 1 auto'
-        node.append(...watchUnseen(node, 'w:' + worker.dispatchId, worker), ...(tag && worker.repo ? [repoLabel(worker.repo)] : []), title, el('span', 'meta-text trunc grow', worker.detail), state(worker.status))
+        node.append(...(tag && worker.repo ? [repoLabel(worker.repo)] : []), title, el('span', 'meta-text trunc grow', worker.detail), state(worker.status))
         if (worker.terminal) {
           node.onclick = () => request('board.switch', { terminal: worker.terminal })
           node.classList.add('go')
