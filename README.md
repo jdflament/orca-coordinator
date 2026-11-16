@@ -242,8 +242,8 @@ a new one.
 `plugin/` is the Orca panel: a plain HTML page plus a worker that reads
 `<state>/board.json`, adds the live Orca workers, whether the coordinator terminal is alive
 and the local git work of the configured repos, and forwards clicks. Sections: header (live
-dot, last update, Start coordinator or jump to it, ⋯ menu, settings gear), focus line,
-counters, standing instructions, **Needs you** (decisions with their action badge and
+dot, last update, Start coordinator or jump to it, ⋯ menu, settings gear),
+**Needs you** (decisions with their action badge and
 imperative buttons, workers waiting for input), **Work** (tickets grouped by workstream with
 repo colour, PR link, status, priority badge, nudge on blocked, done fold; then one row per
 configured repo with uncommitted or unpushed changes no board task covers, which opens that
