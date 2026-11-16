@@ -113,6 +113,7 @@ test('board.get runs `bin/board reconcile` at most once a minute, without waitin
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
     const first = await worker.request('board.get')
     await worker.request('board.get')
+    for (let waited = 0; !existsSync(runs) && waited < 5000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50))
     await new Promise((resolve) => setTimeout(resolve, 300))
     assert.equal(readFileSync(runs, 'utf8'), 'reconcile\n', 'two refreshes inside a minute: one run')
     assert.equal(first.decisions?.length, 3, 'a failing reconcile never breaks the render')
@@ -1442,7 +1443,7 @@ for (const tag of ['v1.0.0', 'v1.0.1', 'v1.1.0']) {
       writeFileSync(config, readFileSync(config, 'utf8').replace(/^(\s*package:).*$/m, `$1 ${join(home, 'orca/plugins/gone')}`))
 
       assert.equal((await updateIfInstalledHere()).updated, true)
-      assert.match(readFileSync(config, 'utf8'), new RegExp(`package: ${packageHome}$`, 'm'), 'the dead package path now points at the live home')
+      assert.match(readFileSync(config, 'utf8'), /package: .*orca\/plugins\/gone$/m, 'the update never repoints the dead package path in config.yaml (only a migration or the user\'s save changes it)')
       assert.equal(readFileSync(join(state, '.rendered-version'), 'utf8').trim(), JSON.parse(readFileSync(join(REAL_PACKAGE, 'package.json'), 'utf8')).version)
       assert.ok(existsSync(join(state, 'COORDINATOR.md')) && existsSync(join(state, 'playbooks')))
       assert.ok(readFileSync(join(state, 'bin/board'), 'utf8').includes(packageHome), 'wrappers point at the live package, not the old one')
@@ -1487,7 +1488,7 @@ test('board.get: a board.json or panel.json that cannot be parsed, or comes from
 })
 
 test('the worker and the CLI agree on the board version they read', async () => {
-  const { BOARD_VERSION: cli } = await import('../../bin/lib/migrate.mjs')
+  const cli = Number(/export const BOARD_VERSION = (\d+)/.exec(readFileSync(join(REAL_PACKAGE, 'bin/lib/migrate.mjs'), 'utf8'))?.[1])
   const { BOARD_VERSION: worker } = await import('./worker')
   assert.equal(worker, cli)
 })

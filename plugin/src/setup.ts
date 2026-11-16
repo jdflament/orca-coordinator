@@ -467,7 +467,8 @@ export async function updateIfInstalledHere(): Promise<{ updated: boolean; outpu
   if (!existsSync(configFile())) return { updated: false }
   const config = await readConfig()
   if (!config) return { updated: false }
-  // The configured package is this plugin's home, or a copy that no longer exists (an Orca version folder that was removed).
+  // The configured package is this plugin's home, or a copy that no longer exists (an Orca version folder that was removed):
+  // config.yaml is never edited for that; render runs from this plugin's own package, so the wrappers point here for this run and every later one.
   const configured = path.resolve(config.paths.package)
   const home = path.resolve(homeDir())
   const dead = configured !== home && !existsSync(path.join(configured, 'bin', 'coordinator.mjs'))
@@ -475,16 +476,11 @@ export async function updateIfInstalledHere(): Promise<{ updated: boolean; outpu
   // Stale = a different folder, or the same folder at another version than the one that rendered the state (an update in place).
   const rendered = readRenderedVersion(config.paths.state)
   const current = versionOf(PACKAGE_DIR)
-  if (!dead && isSynced() && rendered === current) return { updated: false }
+  if (isSynced() && rendered === current) return { updated: false }
   const node = await findNode()
   if (!node) return { updated: false }
   syncPackage(true)
   const cli = path.join(home, 'bin', 'coordinator.mjs')
-  // Point the config at the live home before rendering; a path that exists is never changed.
-  if (dead) {
-    const repoint = await run(node, [cli, 'config', '--merge', JSON.stringify({ paths: { package: home } })])
-    if (!repoint.ok) return { updated: false, output: repoint.output }
-  }
   const result = await run(node, [cli, 'render'], { timeout: 60000 })
   return { updated: result.ok, output: result.output }
 }
