@@ -488,7 +488,11 @@
           node.classList.add('go')
           node.title = 'Open its terminal'
         }
-        if (worker.status === 'idle') {
+        if (worker.status === 'idle' && closingId === worker.dispatchId) {
+          node.classList.remove('go')
+          node.onclick = null
+          node.append(...closeConfirm(worker))
+        } else if (worker.status === 'idle') {
           const close = iconButton('x', 'Close session ' + worker.title, (event) => { event.stopPropagation(); confirmClose(worker) })
           node.append(close)
         }
@@ -537,19 +541,24 @@
         refresh()
       }
       const removeButton = (kind, id) => iconButton('x', 'Remove ' + id + ' from the board', (event) => { event.stopPropagation(); removeItem(kind, id) })
-      // A closed session cannot come back, so it asks first (one line) instead of offering Undo.
+      // A closed session cannot come back, so its row asks first, in place: the X turns into "Close? Close / Cancel".
+      // The pending row is remembered by dispatch id so the periodic refresh does not drop the question.
+      let closingId = null
       function confirmClose(worker) {
-        const node = byId('result')
-        node.className = 'result'
-        node.replaceChildren(
-          el('span', 'trunc grow', 'Close session ' + worker.title + '? It cannot be restored.'),
+        closingId = worker.dispatchId
+        refresh()
+      }
+      function closeConfirm(worker) {
+        const done = () => { closingId = null; refresh() }
+        return [
+          el('span', 'meta-text fixed', 'Close session? It cannot be restored.'),
           button('Close', async () => {
-            node.replaceChildren()
+            closingId = null
             await request('board.closeSession', { dispatchId: worker.dispatchId }).catch((error) => showResult('Could not close ' + worker.title + ': ' + error.message, [], true))
             refresh()
           }, 'inline'),
-          button('Cancel', () => node.replaceChildren(), 'inline')
-        )
+          button('Cancel', done, 'inline')
+        ]
       }
       function renderWorkRow({ item, tag }) {
         const nudge = item.status === 'blocked' ? iconButton('retry', 'Nudge ' + item.id, () => sendText('nudge ' + item.id)) : null

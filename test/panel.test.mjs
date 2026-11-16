@@ -19,7 +19,7 @@ function element() {
   return self
 }
 
-function mountPanel(handlers) {
+function mountPanel(handlers, made = []) {
   const elements = new Map()
   const byId = (id) => (elements.has(id) ? elements.get(id) : (elements.set(id, element()), elements.get(id)))
   const calls = []
@@ -37,7 +37,7 @@ function mountPanel(handlers) {
       }
     }
   }
-  const context = { orca, document: { getElementById: byId, addEventListener() {}, createElement: element, body: element() }, window: {}, setInterval() {}, setTimeout() {}, clearTimeout() {}, console, Set, Map }
+  const context = { orca, document: { getElementById: byId, addEventListener() {}, createElement: (tag) => { const node = element(); node.tag = tag; made.push(node); return node }, body: element() }, window: {}, setInterval() {}, setTimeout() {}, clearTimeout() {}, console, Set, Map }
   context.window = context
   vm.runInNewContext(script, context)
   return { calls, byId }
@@ -58,6 +58,21 @@ test('a failed board load says what failed, not a bare "error: …"', async () =
   const panel = mountPanel({ 'setup.status': () => ({ configured: true }), 'board.get': () => { throw new Error('worker exploded') } })
   await settle()
   assert.equal(panel.byId('updated').textContent, 'Could not load the board: worker exploded')
+})
+
+test('closing an idle session asks in its own row (not in the top banner) and closes only after Close', async () => {
+  const made = []
+  const worker = { dispatchId: 'ctx_1', title: 'Fix login', status: 'idle', detail: '', repo: 'api', terminal: 't1' }
+  const panel = mountPanel({ 'setup.status': () => ({ configured: true }), 'board.get': () => ({ workers: [worker] }), 'board.closeSession': () => ({ closed: true }) }, made)
+  await settle()
+  made.find((n) => n.title === 'Close session Fix login').onclick({ stopPropagation() {} })
+  await settle()
+  assert.ok(!panel.calls.some((c) => c.name === 'board.closeSession'), 'the first click only asks')
+  assert.notEqual(panel.byId('result').textContent, 'Close session Fix login? It cannot be restored.')
+  const close = made.filter((n) => n.textContent === 'Close').at(-1)
+  assert.ok(made.some((n) => /Close session\?/.test(n.textContent)), 'the question is a row element')
+  await close.onclick()
+  assert.equal(JSON.stringify(panel.calls.filter((c) => c.name === 'board.closeSession').map((c) => c.params)), '[{"dispatchId":"ctx_1"}]')
 })
 
 // ---- DOM-free helpers: grouping, clickability, collapsible features ----
