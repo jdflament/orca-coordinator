@@ -136,6 +136,10 @@ export interface BoardView extends Board {
   oncallLabel: string
   /** Stored files the panel could not read (unparseable, or written by a newer version): shown as a recoverable notice, never a dead panel. */
   dataProblems: string[]
+  /** Every live source has answered once (ok or not): until then workers, local work and Start are placeholders and the panel looks again soon. */
+  liveReady?: boolean
+  /** Whole minutes a live source has been failing, only once that is more than a few minutes: the panel hints "last seen Xm ago". */
+  stale?: { workers?: number; localWork?: number }
 }
 
 /** An Orca workspace the coordinator can be set up in. */

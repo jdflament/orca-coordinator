@@ -347,6 +347,25 @@
         const time = (entry) => { const t = Date.parse(entry.at); return Number.isNaN(t) ? -Infinity : t }
         return [...entries].sort((a, b) => (time(a) === time(b) ? 0 : time(b) > time(a) ? 1 : -1))
       }
+      // Board refresh pacing: board.get reads local files and answers at once, so a failure is rare and quiet.
+      // The live parts (workers, local work) arrive in the background: look again soon until they have.
+      const REFRESH_MS = 15000
+      const LIVE_WAIT_MS = 2000
+      const RETRY_MS = 5000
+      const REQUEST_TIMEOUT_MS = 25000
+      // Settles with the promise, or rejects when `ms` passed: no request can leave the panel waiting for ever.
+      function withTimeout(promise, ms, what, timers) {
+        let timer
+        const late = new Promise((_, reject) => { timer = timers.setTimeout(() => reject(new Error(what + ' took longer than ' + Math.round(ms / 1000) + 's')), ms) })
+        return Promise.race([promise, late]).finally(() => timers.clearTimeout(timer))
+      }
+      // A live source failing for minutes is only hinted, beside "updated": no banner, no button.
+      function staleHint(stale) {
+        const parts = []
+        if (stale && Number.isFinite(stale.workers)) parts.push('agents last seen ' + stale.workers + 'm ago')
+        if (stale && Number.isFinite(stale.localWork)) parts.push('local work last seen ' + stale.localWork + 'm ago')
+        return parts.length ? ' · ' + parts.join(' · ') : ''
+      }
       // </pure>
 
       // A link opens its own url. host (board.get's linkHost) only adds an icon and a label; an unknown host stays a plain link.
@@ -1216,29 +1235,46 @@
         }
       }
 
+      // Refresh: one in flight at a time (a newer one makes the older answer stale and ignored), each request
+      // times out, the last good board stays on screen and a failed load is silent once there is one.
+      let refreshSeq = 0
+      let refreshTimer = null
+      let hasBoard = false
+
       async function refresh() {
+        const seq = ++refreshSeq
+        clearTimeout(refreshTimer)
         let step = 'Could not check the setup'
+        let next = REFRESH_MS
         try {
           if (settingsOpen) return
           if (configured !== true) {
-            step = 'Could not check the setup'
             // The setup form is filled in by hand: the periodic refresh must not wipe it.
             if (setupShown && !byId('setup').hidden) return
-            const status = await request('setup.status')
+            const status = await withTimeout(request('setup.status'), REQUEST_TIMEOUT_MS, 'Checking the setup', { setTimeout, clearTimeout })
+            if (seq !== refreshSeq) return
             configured = status?.configured === true
             if (!configured) return renderSetup(status || {})
             showSetup(false)
-            step = 'Could not load the board'
           }
           step = 'Could not load the board'
           // Host request input is JSON: an `undefined` value (the first load has no `seen`) is refused as "input: Invalid input".
-          const board = await request('board.get', seenNeeds ? { seen: [...seenNeeds] } : {})
+          const board = await withTimeout(request('board.get', seenNeeds ? { seen: [...seenNeeds] } : {}), REQUEST_TIMEOUT_MS, 'Loading the board', { setTimeout, clearTimeout })
+          if (seq !== refreshSeq) return
           step = 'Could not show the board'
-          render(board && typeof board === 'object' ? board : {})
+          const view = board && typeof board === 'object' ? board : {}
+          render(view)
+          guard(() => { byId('updated').textContent += staleHint(view.stale) })
+          hasBoard = true
+          if (view.liveReady === false) next = LIVE_WAIT_MS
         } catch (error) {
-          // Say which step failed in the header, and in the Work section only; the other sections and buttons keep working.
-          byId('updated').textContent = step + ': ' + error.message
-          fill('work', 'Work', () => section('Work', [el('div', 'result error', step + ': ' + error.message + '. The rest of the panel keeps working; it retries in 15 seconds.')]))
+          if (seq !== refreshSeq) return
+          next = RETRY_MS
+          // With a board on screen the failure is silent: the board stays and the next try comes soon. Only a panel with nothing to show says why.
+          if (!hasBoard) byId('updated').textContent = step + ': ' + error.message
+        } finally {
+          // Only the newest refresh schedules the next one.
+          if (seq === refreshSeq) refreshTimer = setTimeout(refresh, next)
         }
       }
 
@@ -1259,7 +1295,6 @@
       byId('gear').innerHTML = ICONS.gear
       byId('gear').onclick = () => void openSettings()
       void refresh()
-      setInterval(refresh, 15000)
     </script>
   </body>
 </html>

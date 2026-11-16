@@ -19,7 +19,7 @@ function element() {
   return self
 }
 
-function mountPanel(handlers, made = []) {
+function mountPanel(handlers, made = [], timers = { setTimeout() {}, clearTimeout() {} }) {
   const elements = new Map()
   const byId = (id) => (elements.has(id) ? elements.get(id) : (elements.set(id, element()), elements.get(id)))
   const calls = []
@@ -37,7 +37,7 @@ function mountPanel(handlers, made = []) {
       }
     }
   }
-  const context = { orca, document: { getElementById: byId, addEventListener() {}, createElement: (tag) => { const node = element(); node.tag = tag; made.push(node); return node }, body: element() }, window: {}, setInterval() {}, setTimeout() {}, clearTimeout() {}, console, Set, Map }
+  const context = { orca, document: { getElementById: byId, addEventListener() {}, createElement: (tag) => { const node = element(); node.tag = tag; made.push(node); return node }, body: element() }, window: {}, setInterval() {}, setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout, console, Set, Map }
   context.window = context
   vm.runInNewContext(script, context)
   return { calls, byId }
@@ -73,6 +73,50 @@ test('closing an idle session asks in its own row (not in the top banner) and cl
   assert.ok(made.some((n) => /Close session\?/.test(n.textContent)), 'the question is a row element')
   await close.onclick()
   assert.equal(JSON.stringify(panel.calls.filter((c) => c.name === 'board.closeSession').map((c) => c.params)), '[{"dispatchId":"ctx_1"}]')
+})
+
+// A controllable clock: timers run only when the test fires them.
+function fakeTimers() {
+  const pending = []
+  return {
+    setTimeout: (fn, ms) => { const timer = { fn, ms, live: true }; pending.push(timer); return timer },
+    clearTimeout: (timer) => { if (timer) timer.live = false },
+    fire: (ms) => { const timer = pending.find((t) => t.live && t.ms === ms); assert.ok(timer, 'a timer of ' + ms + 'ms is waiting'); timer.live = false; timer.fn() },
+    next: () => pending.filter((t) => t.live).map((t) => t.ms)
+  }
+}
+
+test('a board load that fails or hangs after a good one is silent: the board stays, nothing error-shaped is shown, the next try comes by itself', async () => {
+  const timers = fakeTimers()
+  let mode = 'ok'
+  const panel = mountPanel({ 'setup.status': () => ({ configured: true }), 'board.get': () => (mode === 'hang' ? new Promise(() => {}) : mode === 'fail' ? Promise.reject(new Error('worker busy')) : { focus: 'ship it', liveReady: true }) }, [], timers)
+  await settle()
+  assert.equal(panel.byId('focus').textContent, 'ship it')
+  mode = 'hang'
+  timers.fire(15000)
+  await settle()
+  timers.fire(25000) // the request timeout
+  await settle()
+  assert.doesNotMatch(String(panel.byId('updated').textContent), /Could not|took longer/, 'no error text in the header')
+  assert.equal(panel.byId('focus').textContent, 'ship it', 'the last good board stays on screen')
+  assert.ok(timers.next().includes(5000), 'the next try is already scheduled')
+  mode = 'ok'
+  timers.fire(5000)
+  await settle()
+  assert.match(String(panel.byId('updated').textContent), /^updated/, 'back to normal without a click')
+})
+
+test('while the live parts are not ready the panel looks again in seconds; a source failing for minutes is only hinted beside "updated"', async () => {
+  const timers = fakeTimers()
+  let view = { focus: 'x', liveReady: false }
+  const panel = mountPanel({ 'setup.status': () => ({ configured: true }), 'board.get': () => view }, [], timers)
+  await settle()
+  assert.deepEqual(timers.next(), [2000])
+  view = { focus: 'x', liveReady: true, stale: { workers: 7 } }
+  timers.fire(2000)
+  await settle()
+  assert.match(String(panel.byId('updated').textContent), /agents last seen 7m ago/)
+  assert.deepEqual(timers.next(), [15000])
 })
 
 // ---- DOM-free helpers: grouping, clickability, collapsible features ----
