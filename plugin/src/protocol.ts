@@ -80,17 +80,9 @@ interface BoardAgent {
   detail?: string
 }
 
-interface BoardInstruction {
-  id: string
-  text: string
-  status: 'active' | 'done' | string
-}
-
 export interface Board {
   version: number
-  focus?: string
   updatedAt?: string
-  instructions?: BoardInstruction[]
   decisions?: BoardDecision[]
   workstreams?: BoardWorkstream[]
   tasks?: BoardTask[]

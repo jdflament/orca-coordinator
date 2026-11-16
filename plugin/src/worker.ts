@@ -339,12 +339,12 @@ function withLinkHosts<T extends { url?: string }>(items: T[] | undefined): T[] 
   })
 }
 
-const BOARD_LISTS = ['instructions', 'decisions', 'workstreams', 'tasks', 'repos', 'agents', 'log'] as const
+const BOARD_LISTS = ['decisions', 'workstreams', 'tasks', 'repos', 'agents', 'log'] as const
 
 /**
  * board.json as the panel can show it, whatever wrote it: not an object reads as an empty board, a
- * list of the wrong type reads as missing, a list item that is not an object is dropped, a wrong-typed
- * focus is dropped. Unknown keys pass through untouched; nothing is written back.
+ * list of the wrong type reads as missing, a list item that is not an object is dropped. Retired keys
+ * (focus, instructions) of an older board pass through untouched and unread; nothing is written back.
  */
 export function sanitizeBoard(raw: unknown): Board {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return { version: 2 }
@@ -354,7 +354,6 @@ export function sanitizeBoard(raw: unknown): Board {
     if (Array.isArray(board[key])) board[key] = (board[key] as unknown[]).filter((item) => item && typeof item === 'object')
     else delete board[key]
   }
-  if ('focus' in board && typeof board.focus !== 'string') delete board.focus
   if ('updatedAt' in board && typeof board.updatedAt !== 'string') delete board.updatedAt
   return board as unknown as Board
 }
