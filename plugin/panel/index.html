@@ -434,6 +434,10 @@
         try {
           const result = await request('board.send', { text: message })
           byId('updated').textContent = result && result.queued ? 'queued (coordinator offline)' : 'sent'
+          if (result && result.queued) {
+            showResult('The coordinator is not running, so "' + message + '" is queued. It is delivered when you start the coordinator.', [], true)
+            byId('result').append(button('Start coordinator', () => void startCoordinator()))
+          }
           return true
         } catch (error) {
           byId('updated').textContent = 'failed: ' + error.message
@@ -1182,7 +1186,7 @@
       }
 
       async function startCoordinator(agent) {
-        const node = byId('start')
+        const node = byId('start') || document.createElement('button')
         node.disabled = true
         node.innerHTML = '<span class="spinner"></span>Starting…'
         try {

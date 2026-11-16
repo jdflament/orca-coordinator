@@ -203,11 +203,22 @@ test('board.send types a click into the live coordinator terminal, then Enter, a
   await withFakeOrca(true, async (log) => {
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    assert.deepEqual(await worker.request('board.send', { text: 'done 1' }), { sent: true, queued: false })
+    assert.deepEqual(await worker.request('board.send', { text: 'done 1' }), { sent: true, queued: false, focused: true })
     const calls = readFileSync(log, 'utf8')
     assert.ok(calls.includes('terminal send --terminal term_coord --text done 1'), 'the click reaches the coordinator terminal')
     assert.ok(calls.includes('--enter'), 'followed by Enter')
     assert.ok(!existsSync(join(dir, 'inbox.jsonl')), 'nothing queued while the coordinator is live')
+    await worker.deactivate()
+  })
+})
+
+test('board.send brings a background coordinator forward before typing', async () => {
+  await withFakeOrca(true, async (log) => {
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
+    assert.equal((await worker.request('board.send', { text: 'done 1' })).focused, true)
+    const calls = readFileSync(log, 'utf8')
+    assert.ok(calls.includes('terminal switch --terminal term_coord'), 'the coordinator tab is switched to')
+    assert.ok(calls.indexOf('terminal switch') < calls.indexOf('terminal send'), 'focus comes before the text')
     await worker.deactivate()
   })
 })

@@ -458,8 +458,10 @@ export default function activate(orca: OrcaWorkerApi): void {
       await queueInbox(dir, text)
       return { sent: false, queued: true }
     }
+    // The coordinator may be in a background tab: bring it forward first. A failed focus never loses the click.
+    const focused = await focusTerminal(host, cliRun, handle).then(() => true, () => false)
     await sendToTerminal(host, cliRun, handle, text)
-    return { sent: true, queued: false }
+    return { sent: true, queued: false, focused }
   })
 
   orca.panels.handle('board.remove', ({ kind, id }) => removeBoardItem(kind, String(id ?? '')))
