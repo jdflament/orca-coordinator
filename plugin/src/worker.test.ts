@@ -1428,3 +1428,28 @@ test('board.get lists worker titles from the CLI when the host API gives no task
     await worker.deactivate()
   })
 })
+
+test('board.get keeps unseen Needs you items across panel sessions until board.markSeen, and lights nothing on first use', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    const host = mockHost({ settings: { coordinatorDir: dir } })
+    const worker = await mountWorker(main, { host })
+    const first = await worker.request('board.get')
+    assert.deepEqual((first.decisions ?? []).filter((d) => d.unseen), [], 'an install or upgrade has nothing unseen: what is on the board at first use counts as seen')
+    assert.ok(Array.isArray(host.data().storage.needsSeen), 'the viewer record lives in plugin storage')
+    await worker.deactivate()
+
+    // Another decision arrives; a brand-new panel session (no `seen` sent) still shows it as unseen.
+    const board = JSON.parse(readFileSync(join(dir, 'board.json'), 'utf8'))
+    board.decisions.push({ id: 99, title: 'Fresh', action: 'Decide', options: [], status: 'pending' })
+    writeFileSync(join(dir, 'board.json'), JSON.stringify(board))
+    const reopened = await mountWorker(main, { host })
+    const view = await reopened.request('board.get')
+    assert.deepEqual((view.decisions ?? []).filter((d) => d.unseen).map((d) => d.id), [99])
+    assert.deepEqual((await reopened.request('board.get')).decisions?.filter((d) => d.unseen).map((d) => d.id), [99], 'looking at the board does not clear it; viewing the item does')
+
+    await reopened.request('board.markSeen', { ids: ['d:99'] })
+    assert.deepEqual((await reopened.request('board.get')).decisions?.filter((d) => d.unseen), [])
+    await reopened.deactivate()
+  })
+})

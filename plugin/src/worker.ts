@@ -17,6 +17,16 @@ const FINISHED_STATES = ['succeeded', 'failed', 'stopped']
 
 let settings: { get(key: string): Promise<unknown> } | null = null
 let host: OrcaWorkerApi['host'] | null = null
+let storage: OrcaWorkerApi['storage'] | null = null
+
+// What this viewer has looked at, in the plugin's own storage (not board.json, not panel.json).
+const SEEN_KEY = 'needsSeen'
+const SEEN_MAX = 500
+
+async function readSeenNeeds(): Promise<Set<string> | null> {
+  const stored = await storage?.get(SEEN_KEY).catch(() => null)
+  return Array.isArray(stored) ? new Set(stored.map(String)) : null
+}
 
 async function stateDir(): Promise<string> {
   const configured = await settings?.get('coordinatorDir')
@@ -267,6 +277,34 @@ function markNew(view: BoardView, seen: string[] | undefined): void {
   for (const worker of view.workers) if (worker.needsInput && !known.has(`w:${worker.dispatchId}`)) worker.isNew = true
 }
 
+/** The Needs you ids the board shows now, as the panel names them ("d:<decision id>", "w:<dispatch id>"). */
+function needsIds(view: BoardView): string[] {
+  return [...(view.decisions ?? []).filter((d) => d.status !== 'answered').map((d) => `d:${d.id}`), ...view.workers.filter((w) => w.needsInput).map((w) => `w:${w.dispatchId}`)]
+}
+
+/**
+ * Marks what this viewer has not looked at yet (`unseen`), across panel sessions. The first time there
+ * is no record, everything already on the board counts as seen: an install or upgrade lights nothing up.
+ */
+async function markUnseen(view: BoardView): Promise<void> {
+  if (!storage) return
+  const stored = await readSeenNeeds()
+  if (!stored) {
+    await storage.set(SEEN_KEY, needsIds(view).slice(-SEEN_MAX)).catch(() => undefined)
+    return
+  }
+  for (const decision of view.decisions ?? []) if (decision.status !== 'answered' && !stored.has(`d:${decision.id}`)) decision.unseen = true
+  for (const worker of view.workers) if (worker.needsInput && !stored.has(`w:${worker.dispatchId}`)) worker.unseen = true
+}
+
+/** Records that the viewer looked at these Needs you items. */
+async function markSeen(ids: string[]): Promise<{ marked: number }> {
+  if (!storage) return { marked: 0 }
+  const merged = [...new Set([...((await readSeenNeeds()) ?? []), ...ids])].slice(-SEEN_MAX)
+  await storage.set(SEEN_KEY, merged)
+  return { marked: ids.length }
+}
+
 async function getBoard(seen?: string[]): Promise<BoardView> {
   const dir = await stateDir()
   reconcileDecisions(dir)
@@ -294,6 +332,7 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
     oncallLabel: panel.oncallLabel ?? ''
   }
   markNew(view, seen)
+  await markUnseen(view)
   return view
 }
 
@@ -434,6 +473,7 @@ async function openWorkspaceBoard(): Promise<{ opened: boolean; error?: string }
 export default function activate(orca: OrcaWorkerApi): void {
   settings = orca.settings
   host = orca.host
+  storage = orca.storage
   // Orca installed a new version of the plugin: migrate stored data, then refresh the plugin's own files (never agent config, never setup).
   void updateIfInstalledHere().catch(() => undefined)
 
@@ -446,6 +486,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('config.removeRepo', ({ path: target }) => removeSkippedRepo(String(target ?? '')))
 
   orca.panels.handle('board.get', (input) => getBoard(Array.isArray(input?.seen) ? input.seen.map(String) : undefined))
+  orca.panels.handle('board.markSeen', ({ ids }) => markSeen(Array.isArray(ids) ? ids.map(String) : []))
   orca.panels.handle('work.openChanges', ({ repo }) => openRepoChanges(String(repo ?? '')))
   orca.panels.handle('agents.openBoard', () => openWorkspaceBoard())
 
@@ -477,4 +518,5 @@ export function deactivate(): void {
   lastReconcile = 0
   settings = null
   host = null
+  storage = null
 }
