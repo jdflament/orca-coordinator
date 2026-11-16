@@ -328,6 +328,16 @@ test('a fresh config ships no jobs, and `automations list` offers playbooks inst
   assert.deepEqual(box.calls('orca').filter((a) => a[0] === 'automations' && a[1] !== 'list'), [])
 })
 
+test('automations install with no jobs in the config removes nothing already registered in Orca', () => {
+  const box = sandbox({ config: { automations: { jobs: [] } } })
+  box.fake('orca', [
+    { match: ['automations', 'list'], stdout: ok({ automations: [{ id: 'a1', name: 'Job · cleanup', trigger: '0 18 * * *', prompt: '[trigger] cleanup' }] }) },
+    anyOk()
+  ])
+  assert.equal(box.run(CLI, ['automations', 'install']).status, 0)
+  assert.deepEqual(box.calls('orca').filter((a) => a[0] === 'automations' && a[1] !== 'list'), [])
+})
+
 // ---- plugin ----
 
 test('plugin load: a failed install leaves no "installed by this package" marker (bug 14)', () => {

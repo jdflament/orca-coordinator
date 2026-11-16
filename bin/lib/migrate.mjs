@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import { parseYaml, toYaml } from './yaml.mjs'
 
-export const CONFIG_VERSION = 2
+export const CONFIG_VERSION = 3
 export const BOARD_VERSION = 2
 
 /** Steps of a version: { to, apply }. apply gets the data (config: the file text) and returns the migrated data. */
@@ -41,7 +41,30 @@ export const CONFIG_STEPS = [
       const header = /^(#[^\n]*\n)+/.exec(stamped)?.[0] ?? ''
       return header + toYaml({ ...data, rules: { ...(data.rules && typeof data.rules === 'object' ? data.rules : {}), optional: [...OPTIONAL_RULES_AT_V2] } })
     }
+  },
+  {
+    // Up to 1.1.x a config without automations.jobs got six implicit jobs. 1.2.0 ships none, so a user
+    // who had automations on keeps exactly those jobs, written out. Automations off/absent: nothing written.
+    to: 3,
+    apply(text) {
+      const stamped = text.replace(/^schemaVersion:.*$/m, 'schemaVersion: 3')
+      const data = parseYaml(stamped) || {}
+      const block = data.automations
+      if (!block || typeof block !== 'object' || block.enabled !== true || 'jobs' in block) return stamped
+      const header = /^(#[^\n]*\n)+/.exec(stamped)?.[0] ?? ''
+      return header + toYaml({ ...data, automations: { ...block, jobs: JOBS_AT_V3.map((j) => ({ ...j })) } })
+    }
   }
+]
+
+/** The implicit jobs of 1.0.x/1.1.x, frozen. */
+export const JOBS_AT_V3 = [
+  { playbook: 'pr-comments', schedule: '0 9-19 * * 1-5', precheck: 'pr-comments', name: 'Review comments on my PRs: propose replies and fixes' },
+  { playbook: 'pr-review', schedule: '15 9,12,15,18 * * 1-5', precheck: 'pr-review', name: 'Review requests: prepare a review' },
+  { playbook: 'ticket-triage', schedule: '30 9 * * 1-5', precheck: 'ticket-triage', name: 'New work items: triage and plan' },
+  { playbook: 'cleanup', schedule: '0 18 * * *', precheck: 'none', name: 'Cleanup: close idle sessions, remove merged worktrees' },
+  { playbook: 'eval-weekly', schedule: '0 9 * * 1', precheck: 'eval-weekly', name: 'Coordinator: weekly self-evaluation' },
+  { playbook: 'playbook-regression', schedule: '0 10 * * 1-5', precheck: 'playbook-regression', name: 'Coordinator: playbook regression check' }
 ]
 
 export const OPTIONAL_RULES_AT_V2 = ['planning-tracker', 'five-line-plan', 'drafts']

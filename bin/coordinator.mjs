@@ -726,6 +726,11 @@ function automationArgs(config, job) {
 function automationsInstall(config) {
   const existing = existingAutomations(config)
   const jobs = config.automations.jobs || []
+  if (!jobs.length) {
+    // An empty list is "nothing configured", not "remove what is registered": use `automations remove` for that.
+    console.log('No automations.jobs in the config: nothing registered, nothing removed.')
+    return
+  }
   for (const job of jobs) {
     const name = automationName(job)
     const found = findAutomation(existing, job)
