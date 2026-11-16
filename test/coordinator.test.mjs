@@ -365,6 +365,17 @@ test('render: a config without rules.optional keeps every optional rule (existin
   assert.ok(!rulesOf(some).includes(PLAN_MARK))
 })
 
+test('render: COORDINATOR.md opens with the mission and main duties, before any detail, and says them once', () => {
+  const box = sandbox()
+  assert.equal(box.run(CLI, ['render']).status, 0)
+  const body = rulesOf(box).replace(/^<!--.*?-->\s*/s, '')
+  assert.ok(body.startsWith('# Mission and main duties'), 'the mission is the first section')
+  const duties = body.slice(0, body.indexOf('\n## ') > 0 ? body.indexOf('\n## ') : undefined)
+  for (const word of ['Delegate', 'Parallelise', 'Optimise', 'Judge', 'sensitive']) assert.ok(duties.includes(word), `mission covers ${word}`)
+  assert.equal(body.split('Never do the work yourself').length - 1, 0, 'the old Mission paragraph is not repeated further down')
+  assert.equal(body.split('# Mission').length - 1, 1)
+})
+
 test('render: an unknown optional rule name is rejected with the available names', () => {
   const box = sandbox({ config: { rules: { optional: ['nope'] } } })
   const out = box.run(CLI, ['render'])
