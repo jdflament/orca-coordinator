@@ -34,14 +34,31 @@ run() { if [ "$DRY" = 1 ]; then echo "dry-run: $*" >&2; else "$@" >/dev/null 2>&
 
 released=0; removed=0; kept=0; archived=0
 
-WORKERS=$("$ORCA" orchestration worker-list --json --limit 100 2>/dev/null || true)
+# Read-only calls (orca list commands, gh) get a deadline, so one slow or hung call degrades to
+# "unknown" instead of stalling the whole run. Removals and releases are never bounded.
+CALL_TIMEOUT="${CLEANUP_CALL_TIMEOUT:-10}"
+bounded() {
+  "$@" & local pid=$!
+  { sleep "$CALL_TIMEOUT"; kill "$pid"; } >/dev/null 2>&1 & local dog=$!
+  wait "$pid" 2>/dev/null; local rc=$?
+  kill "$dog" >/dev/null 2>&1; wait "$dog" 2>/dev/null
+  return $rc
+}
+
+# Each scope runs only the calls it needs: sessions read workers, workspaces read workers,
+# terminals and worktrees, the board reads none of them.
+WORKERS='{}' LIST='{}' TERMINALS='{}'
+if [ $((SC_SESSIONS + SC_WORKSPACES)) -gt 0 ]; then WORKERS=$(bounded "$ORCA" orchestration worker-list --json --limit 100 2>/dev/null || true); fi
+if [ "$SC_WORKSPACES" = 1 ]; then
+  TERMINALS=$(bounded "$ORCA" terminal list --json 2>/dev/null || true)
+  LIST=$(bounded "$ORCA" worktree list --json 2>/dev/null || true)
+fi
 RELEASING=" "
 while IFS=$'\t' read -r dispatch terminal wstate; do
   [ -n "$dispatch" ] || continue
-  [ "$SC_SESSIONS" = 1 ] || continue
   run "$ORCA" orchestration worker-release --dispatch "$dispatch" && released=$((released + 1)) && RELEASING="$RELEASING$terminal " && echo "workers: $RELEASED $dispatch ($wstate)"
-done < <(jq -r --arg c "$COORDINATOR" \
-  '.result.workers[]? | select((.state != "ready" and .state != "running") and .liveness != "live" and .terminalState == "retained" and .terminal != null and .terminal != $c) | [.dispatchId, .terminal, .state] | @tsv' <<<"$WORKERS")
+done < <([ "$SC_SESSIONS" = 1 ] && jq -r --arg c "$COORDINATOR" \
+  '.result.workers[]? | select((.state != "ready" and .state != "running") and .liveness != "live" and .terminalState == "retained" and .terminal != null and .terminal != $c) | [.dispatchId, .terminal, .state] | @tsv' <<<"$WORKERS" 2>/dev/null)
 
 # Where work is still going on: a live worker's workspace ("<repo id>::<path>") or any open terminal
 # (the ones this run just released do not count).
@@ -50,9 +67,7 @@ BUSY+=$(jq -r '.result.workers[]? | select(.liveness == "live") | .workspace // 
 while IFS=$'\t' read -r handle wpath; do
   case "$RELEASING" in *" $handle "*) continue ;; esac
   BUSY+="$wpath"$'\n'
-done < <("$ORCA" terminal list --json 2>/dev/null | jq -r '.result.terminals[]? | [.handle, .worktreePath // ""] | @tsv')
-
-LIST=$("$ORCA" worktree list --json 2>/dev/null || true)
+done < <(jq -r '.result.terminals[]? | [.handle, .worktreePath // ""] | @tsv' <<<"$TERMINALS" 2>/dev/null)
 
 default_ref() {
   local ref
@@ -62,6 +77,23 @@ default_ref() {
     git -C "$1" rev-parse -q --verify "refs/heads/$ref" >/dev/null 2>&1 && { echo "$ref"; return; }
   done
 }
+
+# One `gh pr list` per worktree, all at once (8 at a time): the network calls overlap instead of
+# adding up. Each answer lands in a file; a failed or timed-out call leaves ".rc" non-zero.
+PRDIR=$(mktemp -d "${TMPDIR:-/tmp}/cleanup-pr.XXXXXX")
+trap 'rm -rf "$PRDIR"' EXIT
+pr_key() { printf '%s' "$1" | cksum | cut -d' ' -f1; }
+while IFS=$'\t' read -r path branch; do
+  [ "$SC_WORKSPACES" = 1 ] || break
+  [ -d "$path" ] && [ -n "$branch" ] || continue
+  [ -z "$ROOT" ] || case "$path" in "$ROOT"*) ;; *) continue ;; esac
+  while [ "$(jobs -r | wc -l)" -ge 8 ]; do sleep 0.05; done
+  key=$(pr_key "$path")
+  ( cd "$path" || exit 1
+    bounded "$GH" pr list --head "${branch#refs/heads/}" --state all --json state,number,headRefOid -q '.[] | "\(.state) \(.number) \(.headRefOid)"' >"$PRDIR/$key" 2>/dev/null
+    echo $? >"$PRDIR/$key.rc" ) &
+done < <(jq -r '.result.worktrees[]? | select(.isMainWorktree | not) | [.path, .branch] | @tsv' <<<"$LIST" 2>/dev/null)
+wait
 
 while IFS=$'\t' read -r path branch; do
   [ "$SC_WORKSPACES" = 1 ] || break
@@ -74,7 +106,8 @@ while IFS=$'\t' read -r path branch; do
   branch="${branch#refs/heads/}"
 
   # Is the work done? Merged into the default branch (merge commits), or its PR says so.
-  reason="" pr_head="" pr_num="" pr_state="" open_pr=""
+  reason="" pr_head="" pr_num="" pr_state="" open_pr="" key=$(pr_key "$path")
+  pr_known=0; [ "$(cat "$PRDIR/$key.rc" 2>/dev/null)" = 0 ] && pr_known=1
   while read -r state num sha; do
     [ -n "$state" ] || continue
     case "$state" in
@@ -82,7 +115,7 @@ while IFS=$'\t' read -r path branch; do
       MERGED) [ "$pr_state" = MERGED ] || { pr_state=MERGED pr_num="$num" pr_head="$sha"; } ;;
       CLOSED) [ -n "$pr_state" ] || { pr_state=CLOSED pr_num="$num" pr_head="$sha"; } ;;
     esac
-  done < <(cd "$path" && "$GH" pr list --head "$branch" --state all --json state,number,headRefOid -q '.[] | "\(.state) \(.number) \(.headRefOid)"' 2>/dev/null)
+  done < <(cat "$PRDIR/$key" 2>/dev/null)
   if [ -n "$open_pr" ]; then keep "open PR #$open_pr"; continue; fi
   base=$(default_ref "$path")
   by_ancestry=0
@@ -90,6 +123,7 @@ while IFS=$'\t' read -r path branch; do
   if [ "$by_ancestry" = 1 ]; then reason="merged${pr_num:+ #$pr_num}"
   elif [ "$pr_state" = MERGED ]; then reason="merged #$pr_num"
   elif [ "$pr_state" = CLOSED ]; then reason="closed #$pr_num"
+  elif [ "$pr_known" = 0 ]; then keep "PR status unavailable (gh failed or timed out)"; continue
   else keep "no merged or closed PR"; continue; fi
 
   if [ -n "$(git -C "$path" status --porcelain 2>/dev/null)" ]; then keep dirty; continue; fi
@@ -101,7 +135,7 @@ while IFS=$'\t' read -r path branch; do
   fi
   case "$BUSY" in *$'\n'"$path"$'\n'*) keep "live (worker or open terminal)"; continue ;; esac
   run "$ORCA" worktree rm --worktree "path:$path" --json && removed=$((removed + 1)) && echo "worktrees: $REMOVED $name ($reason)"
-done < <(jq -r '.result.worktrees[]? | select(.isMainWorktree | not) | [.path, .branch] | @tsv' <<<"$LIST")
+done < <(jq -r '.result.worktrees[]? | select(.isMainWorktree | not) | [.path, .branch] | @tsv' <<<"$LIST" 2>/dev/null)
 
 # Stale entries (a worktree folder that is gone, e.g. a temp scratchpad) are dropped from each repo.
 while IFS= read -r repo; do
@@ -111,7 +145,7 @@ while IFS= read -r repo; do
   while IFS= read -r line; do
     [ -n "$line" ] && echo "worktrees: $verb stale worktree entry: ${line#Removing }"
   done < <(git -C "$repo" worktree prune "${flags[@]}" 2>&1)
-done < <(jq -r '.result.worktrees[]? | select(.isMainWorktree) | .path' <<<"$LIST")
+done < <(jq -r '.result.worktrees[]? | select(.isMainWorktree) | .path' <<<"$LIST" 2>/dev/null)
 
 # Finished work on the board (merged tasks, answered decisions) goes to the archive, never deleted.
 board_flags=(); [ "$DRY" = 1 ] && board_flags=(--dry-run)

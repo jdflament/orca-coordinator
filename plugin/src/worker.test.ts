@@ -412,6 +412,25 @@ test('board.cleanup dry run: counts what it would close and remove, and changes 
   })
 })
 
+test('board.cleanup dry run that takes too long returns what it found, not an error', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    writeFileSync(join(dir, 'bin', 'cleanup'), '#!/bin/sh\necho "worktrees: would remove a/b (merged)"\nexec sleep 30\n')
+    process.env.COORDINATOR_PREVIEW_TIMEOUT_MS = '300'
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    try {
+      const result = await worker.request('board.cleanup', { dryRun: true, scope: 'workspaces' })
+      assert.equal(result.dryRun, true)
+      assert.equal(result.counts, undefined, 'no counts: the panel offers no Confirm on a partial preview')
+      assert.deepEqual(result.actions, ['worktrees: would remove a/b (merged)'])
+      assert.match(result.summary, /took too long/)
+    } finally {
+      delete process.env.COORDINATOR_PREVIEW_TIMEOUT_MS
+      await worker.deactivate()
+    }
+  })
+})
+
 test('board.cleanup confirmed: releases the finished worker only (never a running one or the coordinator\'s terminal) and removes the merged worktree', async () => {
   await withFakeOrca(true, async () => {
     const { dir, calls, worktree } = cleanupFixture()
