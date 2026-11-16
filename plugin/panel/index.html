@@ -96,6 +96,11 @@
       .grp { display: flex; align-items: center; gap: 8px; min-height: 20px; margin: 8px 8px 0; padding: 0 4px; border-radius: var(--radius-sm); min-width: 0; white-space: nowrap; }
       .grp .repo { max-width: 50%; }
       .repo { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 11px; flex: none; max-width: 35%; overflow: hidden; }
+      /* Work by repository: each repo is a faint band with a soft accent in its repo colour; its content sits slightly indented. */
+      .rgroup { margin: 10px 8px 0; padding-bottom: 4px; border-radius: var(--radius-md); background: color-mix(in srgb, var(--fg) 3%, transparent); box-shadow: inset 2px 0 0 color-mix(in srgb, var(--accent-repo, transparent) 45%, transparent); overflow: hidden; }
+      .rgroup > .grp { margin: 0; padding: 4px 8px 0 10px; }
+      .rgroup > .feature { margin: 0; padding: 0 8px 0 10px; }
+      .rgroup .row, .rgroup .wk, .rgroup .wrow, .rgroup .more, .rgroup .fnote { margin-left: 14px; margin-right: 4px; }
       .fixed { flex: none; overflow: visible; }
       .repo i { width: 6px; height: 6px; border-radius: 50%; flex: none; }
       .state { font-size: 11px; white-space: nowrap; flex: none; margin-left: auto; }
@@ -648,10 +653,12 @@
 
       // Repository > workstream > item. The repo header is the local-changes summary and opens Source Control.
       function renderWork(plan) {
-        return plan.flatMap((group) => [
-          ...(group.repo ? [renderRepoHeader(group)] : []),
-          ...group.streams.flatMap(({ ws, items }) => renderFeature(ws, items))
-        ])
+        return plan.map((group) => {
+          const band = el('div', 'rgroup')
+          if (group.repo) band.style.setProperty('--accent-repo', repoColor(group.repo))
+          band.append(...(group.repo ? [renderRepoHeader(group)] : []), ...group.streams.flatMap(({ ws, items }) => renderFeature(ws, items)))
+          return band
+        })
       }
 
       function renderRepoHeader({ repo, local }) {
