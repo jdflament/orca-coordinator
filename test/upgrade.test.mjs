@@ -73,7 +73,7 @@ for (const tag of TAGS) {
     assert.deepEqual(written.tasks.map((t) => t.id), [...before.tasks.map((t) => t.id), 'PROJ-9'])
     assert.equal(written.focus, '')
     assert.deepEqual(written.instructions, [])
-    assert.doesNotMatch(read(path.join(stateDir, 'board.md')), /new focus|new rule|Instructions|Focus/)
+    assert.doesNotMatch(read(path.join(stateDir, 'BOARD.md')), /new focus|new rule|Instructions|Focus/)
   })
 
   test(`upgrade from ${tag}: config reads, keeps its values and unknown keys, and migrates once with one backup`, () => {
