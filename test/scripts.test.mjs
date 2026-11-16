@@ -429,3 +429,36 @@ test('scan.sh: a failed gh or orca is reported as unavailable, not as an empty r
   for (const kind of ['automation', 'review', 'mine']) assert.ok(out.out.split('\n').includes(`${kind}\tunavailable`), kind)
   assert.match(out.out, /^version\t[\d.]+\tunknown\tcurrent$/m)
 })
+
+test('cleanup.sh: a hung gh call does not fail or stall the preview, its worktree is kept with the reason', () => {
+  const f = worktreeFixture()
+  f.add('ff-merged')
+  f.add('slow', { extraCommit: true })
+  f.configure()
+  f.box.fake('gh', [
+    { match: ['pr', 'list', 'slow'], exec: ['sleep', '8'], stdout: '[]' },
+    { match: ['pr', 'list'], stdout: '[]' }
+  ])
+  const started = Date.now()
+  const dry = f.box.run('bin/cleanup.sh', ['-n', '--workspaces'], { extraEnv: { CLEANUP_CALL_TIMEOUT: '1' } })
+  assert.equal(dry.status, 0, dry.err)
+  assert.ok(Date.now() - started < 6000, 'the deadline cut the hung call short')
+  assert.ok(dry.out.split('\n').includes('worktrees: kept wt/slow: PR status unavailable (gh failed or timed out)'), dry.out)
+  assert.ok(dry.out.split('\n').includes('worktrees: would remove wt/ff-merged (merged)'), 'the other worktree is still previewed')
+  assert.match(dry.out, /removed 1 worktrees, kept 1/)
+})
+
+test('cleanup.sh scopes: each scope only makes the calls its own work needs', () => {
+  const f = worktreeFixture()
+  f.add('done')
+  f.configure({ workers: [{ dispatchId: 'ctx_done', state: 'succeeded', liveness: 'exited', terminalState: 'retained', terminal: 'term_done' }] })
+  const called = (scope) => {
+    f.box.run('bin/cleanup.sh', ['-n', scope])
+    const calls = [...f.box.calls('orca').map((a) => a.slice(0, 2).join(' ')), ...f.box.calls('gh').map(() => 'gh')]
+    fs.rmSync(path.join(f.box.dir, 'fake', 'calls.jsonl'), { force: true })
+    return [...new Set(calls)].sort()
+  }
+  assert.deepEqual(called('--board'), [], 'board: no orca, no gh')
+  assert.deepEqual(called('--sessions'), ['orchestration worker-list'], 'sessions: workers only, no worktree, terminal or gh call')
+  assert.deepEqual(called('--workspaces'), ['gh', 'orchestration worker-list', 'terminal list', 'worktree list'])
+})

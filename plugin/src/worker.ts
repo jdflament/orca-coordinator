@@ -429,12 +429,19 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
   return view
 }
 
+/** A dry run only looks: it gets a short deadline and, past it, returns what it found so far instead of failing. */
+const PREVIEW_TIMEOUT_MS = 90000
+
 /** Runs <dir>/bin/cleanup (with -n: a dry run that changes nothing) and reads its summary line. */
 function runCleanup(dir: string, dryRun: boolean, scope?: CleanupScope): Promise<CleanupResult> {
+  const previewMs = Number(process.env.COORDINATOR_PREVIEW_TIMEOUT_MS) || PREVIEW_TIMEOUT_MS
   return new Promise((resolve, reject) => {
-    execFile('/bin/bash', [path.join(dir, 'bin', 'cleanup'), ...(dryRun ? ['-n'] : []), ...(scope ? [`--${scope}`] : [])], { timeout: 300000 }, (error, stdout) => {
-      if (error) return reject(error)
-      const lines = String(stdout).trim().split('\n').filter(Boolean)
+    execFile('/bin/bash', [path.join(dir, 'bin', 'cleanup'), ...(dryRun ? ['-n'] : []), ...(scope ? [`--${scope}`] : [])], { timeout: dryRun ? previewMs : 300000 }, (error, stdout) => {
+      const lines = String(stdout ?? '').trim().split('\n').filter(Boolean)
+      if (error) {
+        if (!dryRun || !(error as { killed?: boolean }).killed) return reject(error)
+        return resolve({ summary: 'Still checking: this took too long, so only part of it was looked at. Try again in a moment.', actions: lines, dryRun })
+      }
       const summary = lines.at(-1) ?? ''
       const counts = summary.match(/released (\d+) sessions, removed (\d+) worktrees, kept (\d+)(?:[^,]*, archived (\d+))?/)
       resolve({
