@@ -54,6 +54,9 @@
     },
     {
       "kind": "workspace:write"
+    },
+    {
+      "kind": "agent:launch"
     }
   ]
 }

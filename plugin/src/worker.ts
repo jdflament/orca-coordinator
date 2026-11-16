@@ -418,7 +418,7 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
     workers,
     localWork,
     coordinatorLive,
-    canStart: live.setup.settled && live.coordinator.settled && config !== null && !coordinatorLive,
+    canStart: live.coordinator.settled && !coordinatorLive,
     staleLinks,
     repoColors: panel.repoColors && typeof panel.repoColors === 'object' && !Array.isArray(panel.repoColors) ? panel.repoColors : {},
     oncallLabel: typeof panel.oncallLabel === 'string' ? panel.oncallLabel : '',
@@ -512,21 +512,33 @@ async function queueInbox(dir: string, text: string): Promise<void> {
 }
 
 /**
- * Opens the coordinator in a terminal of the configured workspace, as the agent the user chose in the panel,
- * else the one set in config.yaml, else the only kind Orca reports. Orca offers no default agent and no agent
- * list, so with several kinds the panel asks which, and with none the user starts it from Orca's own launcher.
+ * Opens one agent session and tells it to load the coordinator skill; nothing else. The agent is the one
+ * Orca reports in the focused workspace (`agents.list`; Orca offers no default-agent API), else the one set
+ * in config.yaml. The workspace is the configured one when it can be read, else Orca's active workspace.
+ * Rendering rules, recording the terminal and naming the tab are the coordinator's own job (the skill).
  */
-async function startCoordinator(input: { agent?: string } = {}): Promise<{ started: boolean; output: string; choices?: string[] }> {
-  const config = await readConfig()
-  if (!config) return { started: false, output: 'The coordinator is not set up yet.' }
-  const kinds = [...new Set((await listReportedAgents(host)).map((row) => row.kind))]
-  const requested = String(input?.agent ?? '').trim()
-  if (requested && !/^[\w.-]+$/.test(requested)) return { started: false, output: `Invalid agent id: ${requested}` }
-  const agent = requested || String(config.agents.coordinator.agent ?? '').trim() || (kinds.length === 1 ? kinds[0] : '')
-  if (!agent && kinds.length > 1) return { started: false, output: 'Pick the agent to start the coordinator with (the agents Orca reports).', choices: kinds }
-  if (!agent) return { started: false, output: "Orca does not report an agent to start here. Start the coordinator from Orca's own agent launcher (a new agent tab in " + config.paths.workspace + '), then ask it to load the coordinator skill.' }
+async function startCoordinator(input: { agent?: string } = {}): Promise<{ started: boolean; output: string }> {
+  const config = await getConfig().catch(() => null)
+  const reported = (await listReportedAgents(host).catch(() => []))[0]?.kind
+  const agent = String(input?.agent ?? '').trim() || String(config?.agents?.coordinator?.agent ?? '').trim() || reported || ''
+  if (!/^[\w.-]+$/.test(agent)) return { started: false, output: "Orca reports no agent here. Open one in Orca's agent launcher, then press Start again." }
+  const model = config ? modelFor(config, 'coordinator') : ''
+  const workspace = config?.paths?.workspace && existsSync(config.paths.workspace) ? `path:${config.paths.workspace}` : 'active'
   const prompt = 'Load the coordinator skill and start a coordinator session.'
-  const args = ['agent', 'launch', '--agent', agent, ...(modelFor(config, 'coordinator') ? ['--model', modelFor(config, 'coordinator')] : []), '--worktree', `path:${config.paths.workspace}`, '--prompt', prompt, '--surface', 'terminal', '--focus', '--json']
+  // Host API first: the configured workspace, as Orca lists it. No match (or no host method): the CLI, in Orca's active workspace.
+  if (host?.has('agent.launch') && host.has('workspace.list') && config?.paths?.workspace) {
+    try {
+      const { workspaces } = (await host.call('workspace.list', {})) as { workspaces?: { id: string; path: string }[] }
+      const match = (workspaces ?? []).find((row) => path.resolve(row.path) === path.resolve(config.paths.workspace))
+      if (match) {
+        await host.call('agent.launch', { workspaceId: match.id, agent, prompt })
+        return { started: true, output: '' }
+      }
+    } catch {
+      // The host refused or has no answer: the CLI below does the same launch.
+    }
+  }
+  const args = ['agent', 'launch', '--agent', agent, ...(model ? ['--model', model] : []), '--worktree', workspace, '--prompt', prompt, '--surface', 'terminal', '--focus', '--json']
   try {
     await runOrca(args, 60000)
     return { started: true, output: '' }

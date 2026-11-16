@@ -1102,28 +1102,51 @@ test('setup with no Orca data names no agent: nothing listed, nothing preselecte
   })
 })
 
-test('Start coordinator: the agent comes from what Orca reports or what the user picked; with neither, the user starts it from Orca\'s launcher', async () => {
+test('Start coordinator: opens one session with the agent Orca reports and sends the skill instruction, with no setup or config needed', async () => {
   await withHome(async (home) => {
-    const workspace = join(home, 'work')
-    mkdirSync(workspace)
     await withFakeOrca(false, async (log) => {
-      assert.ok((await (await mount(home)).request('setup.run', { workspace, confirmed: true })).ok)
-      const launches = () => readFileSync(log, 'utf8').split('\n').filter((line) => line.startsWith('agent launch'))
+      const launches = () => (existsSync(log) ? readFileSync(log, 'utf8') : '').split('\n').filter((line) => line.startsWith('agent launch'))
 
       const none = await (await mount(home)).request('setup.start', {})
       assert.equal(none.started, false)
-      assert.match(none.output, /Orca's own agent launcher/)
-      assert.deepEqual(launches(), [], 'nothing launched without an agent')
+      assert.deepEqual(launches(), [], 'no agent reported: nothing launched, a plain message')
 
-      const several = await (await mount(home, ['kind-a', 'kind-b'])).request('setup.start', {})
-      assert.deepEqual([several.started, several.choices], [false, ['kind-a', 'kind-b']], 'asks which of the reported kinds')
-      assert.deepEqual(launches(), [])
-
-      assert.equal((await (await mount(home, ['kind-a', 'kind-b'])).request('setup.start', { agent: 'kind-b' })).started, true)
-      assert.equal((await (await mount(home, ['kind-c'])).request('setup.start', {})).started, true, 'a single reported kind needs no question')
-      assert.deepEqual(launches().map((line) => line.match(/--agent (\S+)/)?.[1]), ['kind-b', 'kind-c'])
-      assert.ok(launches().every((line) => !line.includes('--model')), 'no model unless the user configured one')
+      assert.equal((await (await mount(home, ['kind-a', 'kind-b'])).request('setup.start', {})).started, true, 'no config, several kinds: the first one Orca reports')
+      assert.equal(launches().length, 1)
+      assert.match(launches()[0], /--agent kind-a --worktree active --prompt Load the coordinator skill/)
+      assert.ok(!launches()[0].includes('--model'), 'no model unless the user configured one')
     })
+  })
+})
+
+test('Start coordinator: with the host API it launches the agent in the configured workspace through agent.launch, not the CLI', async () => {
+  await withHome(async (home) => {
+    await withFakeOrca(false, async (log) => {
+      writeConfig(home)
+      const workspace = join(home, 'work')
+      const host = mockHost({
+        settings: { coordinatorDir: join(home, '.local/state/orca-coordinator') },
+        results: {
+          'agents.list': { agents: [{ terminalId: 't1', title: null, agent: 'claude', state: 'working', stateStartedAt: 0 }] },
+          'workspace.list': { workspaces: [{ id: 'ws9', kind: 'folder', name: 'work', path: workspace, branch: null, hostId: null }], truncated: false },
+          'agent.launch': { terminalId: 'new1' }
+        }
+      })
+      const worker = await mountWorker(main, { host })
+      assert.equal((await worker.request('setup.start', {})).started, true)
+      assert.deepEqual(host.calls.filter((c) => c.method === 'agent.launch').map((c) => c.params), [{ workspaceId: 'ws9', agent: 'claude', prompt: 'Load the coordinator skill and start a coordinator session.' }])
+      assert.ok(!existsSync(log) || !readFileSync(log, 'utf8').includes('agent launch'), 'the CLI was not used: ' + (existsSync(log) ? readFileSync(log, 'utf8') : ''))
+      await worker.deactivate()
+    })
+  })
+})
+
+test('board.get: no state at all gives an empty board with Start offered, never an error', async () => {
+  await withHome(async (home) => {
+    await withFakeOrca(false, async () => {
+      const view = await getLive(await mount(home))
+      assert.deepEqual([view.coordinatorLive, view.canStart, view.decisions ?? [], view.tasks ?? []], [false, true, [], []])
+    }, undefined, [])
   })
 })
 
@@ -1186,12 +1209,11 @@ test('plugin update refreshes the plugin\'s own files only: stale agent links an
   })
 })
 
-test('board.get canStart: Start coordinator shows only when set up and not running', async () => {
+test('board.get canStart: Start coordinator shows whenever the coordinator is not running', async () => {
   await withHome(async (home) => {
-    // Not set up: no config.yaml.
     await withFakeOrca(false, async () => {
       const worker = await mount(home)
-      assert.equal((await getLive(worker)).canStart, false, 'not set up')
+      assert.equal((await getLive(worker)).canStart, true, 'no config yet')
       await worker.deactivate()
     })
     writeConfig(home)
