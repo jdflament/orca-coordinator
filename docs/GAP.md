@@ -18,7 +18,7 @@ runtime state). `cfg.x` names a key in `config.yaml`.
 | Router: precheck gate, live-coordinator check, trigger text, budget warning | `bin/route.sh` | `<state>/automations/route-*.sh` (generated) | `automations.*` |
 | Precheck framework: exit non-zero when unchanged, dedupe state | `bin/lib/precheck.sh`, `prechecks/*.sh` | `<state>/automations/state/` | — |
 | Prechecks shipped: PR comments, PR reviews, ticket triage, weekly eval, playbook regression | `prechecks/` | — | `github.*`, `adapters.ticketing.*` |
-| Automation schedules | `config.example.yaml` defaults | registered in Orca by `init` | `automations.jobs[]` |
+| Automation schedules | none shipped; you list them | registered in Orca by `automations install` | `automations.jobs[]` |
 | Board schema (tasks local/pr/hold/blocked/merged, decisions with `action`, `url`, `repo`, `oncall`) | `schema/board.schema.json`, `bin/board.mjs` (validates writes), `plugin/src/protocol.ts` | `<state>/board.json` | — |
 | Decision = action badge + imperative button, Skip / Explain, drafts as decisions | `rules/60-board.md`, `plugin/panel/index.html` | — | — |
 | Board agents: live Orca workers from `worker-list`; `B agent:set` only for agents Orca does not report | `rules/60-board.md`, `bin/board.mjs` | — | — |

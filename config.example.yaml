@@ -94,17 +94,15 @@ sensitive: [commit, push, pr-open, pr-merge, pr-comment, ticket-write, chat-post
 queue: {max: 3, staleHours: 24}
 budget: {stateBytes: 2500, reportHead: 2500, workerRetries: 1, maxWorkersPerTrigger: 3}
 
+# Opt-in: nothing here is created for you. Add a job only when you want one, then run
+# `orca-coordinator automations install` (or `init --automations`) to register it in Orca.
+# playbook = a file in playbooks/, schedule = cron, precheck = a script in prechecks/ ("none" = always run).
+# Example job:  - {playbook: cleanup, schedule: "0 18 * * *", precheck: none, name: "Cleanup"}
 automations:
-  enabled: false                             # init registers the jobs below only when true (or --automations)
+  enabled: false                             # false: `doctor` does not expect the jobs below to be registered
   timezone: UTC
   graceMinutes: 720
-  jobs:
-    - {playbook: pr-comments, schedule: "0 9-19 * * 1-5", precheck: pr-comments, name: "Review comments on my PRs: propose replies and fixes"}
-    - {playbook: pr-review, schedule: "15 9,12,15,18 * * 1-5", precheck: pr-review, name: "Review requests: prepare a review"}
-    - {playbook: ticket-triage, schedule: "30 9 * * 1-5", precheck: ticket-triage, name: "New work items: triage and plan"}
-    - {playbook: cleanup, schedule: "0 18 * * *", precheck: none, name: "Cleanup: close idle sessions, remove merged worktrees"}
-    - {playbook: eval-weekly, schedule: "0 9 * * 1", precheck: eval-weekly, name: "Coordinator: weekly self-evaluation"}
-    - {playbook: playbook-regression, schedule: "0 10 * * 1-5", precheck: playbook-regression, name: "Coordinator: playbook regression check"}
+  jobs: []
 
 board:
   oncallLabel: ""                           # text of the priority badge on items flagged oncall; empty shows "Priority"

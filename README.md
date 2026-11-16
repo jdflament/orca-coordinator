@@ -15,9 +15,9 @@ Three folds:
 1. **Board and panel.** `board.json` (schema inside) holds what needs you, the work by
    ticket, other PRs and running workers. An Orca sidebar panel shows it with imperative
    buttons (Merge, Skip, Explain, nudge, stop) and a zero-model **Clean up** (⋯ menu).
-2. **Playbooks and automations with prechecks.** Six recurring jobs (PR comments, PR
-   review, ticket triage, cleanup, weekly eval, playbook regression) as rendered specs
-   for workers. Orca runs them on a schedule only when a shell precheck says something
+2. **Playbooks and automations with prechecks.** Playbook templates (PR comments, PR
+   review, ticket triage, cleanup, weekly eval, playbook regression) rendered as specs
+   for workers; you choose which, if any, to schedule. Orca runs them on a schedule only when a shell precheck says something
    changed, and routes the trigger to the live coordinator instead of starting a session.
 3. **Self-improvement loop.** One line per correction you make (`lessons.md`),
    counters without a model (`metrics.tsv`), a weekly worker that proposes at most three
@@ -97,8 +97,8 @@ Non-interactive, all flags:
 write the optional CLI adapter blocks described under Tools.)
 
 `init` is idempotent: it keeps a config it did not write (merge only), keeps existing
-state, re-links the skill, reloads the panel if needed, and registers only the
-automations that are missing. Run it again after editing the config, or just
+state, re-links the skill, reloads the panel if needed, and never registers
+automations by itself (see Automations). Run it again after editing the config, or just
 `node bin/coordinator.mjs render` for the rules, playbooks and wrappers.
 
 What `init` does, in order: writes `~/.config/orca-coordinator/config.yaml`
@@ -110,8 +110,8 @@ repeatable: `~/.claude/skills`, `~/.config/opencode/skills`, `~/.agents/skills`;
 coordinator's own agent, which the plugin takes from what Orca reports; `--no-skill-link` links none; Codex gets a paste hint), edits
 `~/.claude/settings.json` (`statusLine`, backup kept) only with `--statusline`, installs the
 panel through Orca's plugin installer (`orca plugin install <clone>`; it leaves alone a panel
-Orca installed from GitHub) and opens it, and, when `automations.enabled` is true or
-`--automations` is given, registers the scheduled jobs.
+Orca installed from GitHub) and opens it. Only with `--automations` does it also register the
+jobs you listed under `automations.jobs`.
 
 ## Configure
 
@@ -213,7 +213,8 @@ coordinator checks with its own tools. Writes through an adapter refuse without 
 
 ## Automations
 
-Each job in `automations.jobs[]` becomes an Orca automation whose precheck is
+Automations are opt-in: no job ships by default and setup creates none. Each job you add to
+`automations.jobs[]` becomes an Orca automation whose precheck is
 `bin/route.sh <playbook> <precheck>`:
 
 1. the precheck (`prechecks/<name>.sh`) exits non-zero when nothing changed since the
@@ -226,13 +227,14 @@ Each job in `automations.jobs[]` becomes an Orca automation whose precheck is
 
 ```sh
 node bin/coordinator.mjs automations list       # jobs from config and whether Orca has them
-node bin/coordinator.mjs automations install    # register the missing ones (needs automations.enabled or runs anyway)
+node bin/coordinator.mjs automations install    # register the jobs you listed (explicit action)
 node bin/coordinator.mjs automations remove
 bash bin/route.sh pr-review pr-review; echo $?   # try a route by hand
 ```
 
-Automations are off by default (`automations.enabled: false`); `init --automations`
-or the config turns them on. See [`prechecks/README.md`](prechecks/README.md) to write
+`automations.jobs` is empty by default; `automations list` shows the playbooks you can schedule.
+Only `automations install` (or `init --automations`) registers anything, and only your listed jobs.
+Existing jobs in your config are kept as they are. See [`prechecks/README.md`](prechecks/README.md) to write
 a new one.
 
 ## Board panel

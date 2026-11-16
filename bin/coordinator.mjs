@@ -417,7 +417,7 @@ async function init() {
   installSkill(config)
   if (config.agents.coordinator.statusline) installStatusline(config)
   if (!has('no-plugin')) await pluginLoad(config)
-  if (config.automations.enabled) automationsInstall(config)
+  if (has('automations')) automationsInstall(config)  // never implied by the config: an explicit flag only
 
   report()
   console.log(`\nNext: open a terminal in ${config.paths.workspace}, start your agent from Orca, and ask it to load the coordinator skill.`)
@@ -771,6 +771,11 @@ function automationsRemove(config) {
 
 function automationsList(config) {
   const existing = existingAutomations(config)
+  if (!(config.automations.jobs || []).length) {
+    const dir = path.join(config.paths.package, 'playbooks')
+    const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.md') && f !== 'README.md' && !f.startsWith('_')).map((f) => f.slice(0, -3)) : []
+    console.log(`No automations configured (none are created for you). Playbooks you can schedule: ${names.join(', ')}.\nAdd a job under automations.jobs in config.yaml, then run "automations install".`)
+  }
   for (const job of config.automations.jobs || []) {
     const found = findAutomation(existing, job)
     console.log(`${found ? '✓' : '·'} ${job.playbook.padEnd(22)} ${job.schedule.padEnd(20)} precheck ${job.precheck || 'none'}${found ? `  (${found.enabled ? 'enabled' : 'disabled'}, next ${found.nextRunAt ? new Date(found.nextRunAt).toISOString() : '-'})` : '  (not registered)'}`)
