@@ -367,12 +367,15 @@ What still goes through the `orca` CLI, and what would let it switch:
 
 ```sh
 node bin/coordinator.mjs uninstall           # automations, panel plugin, skill links, wrappers, status line
-node bin/coordinator.mjs uninstall --purge   # also deletes ~/.local/state/orca-coordinator and ~/.config/orca-coordinator (asks first)
+node bin/coordinator.mjs uninstall --purge   # also deletes the state and config folders and, when run from it, the installed package copy (asks first, no backup)
 ```
 
-Both accept `--dry-run`. Installed from Orca, run them as
-`node ~/.local/share/orca-coordinator/bin/coordinator.mjs uninstall --purge`, then delete
-`~/.local/share/orca-coordinator`; from a clone, delete the clone by hand.
+Orca's plugin host API has no uninstall hook, so removal is this explicit command: run `--purge`
+before removing the plugin and a reinstall is a fresh start. It only removes what this package
+created (its own `statusLine` entry in `~/.claude/settings.json`, its skill links, wrappers,
+config, migration backups, state); other files in those folders stay. Both accept `--dry-run`.
+Installed from Orca, run `node ~/.local/share/orca-coordinator/bin/coordinator.mjs uninstall --purge`
+(it deletes that copy too); from a clone, delete the clone by hand.
 
 ## Contributing
 
