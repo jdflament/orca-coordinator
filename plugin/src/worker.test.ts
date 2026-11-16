@@ -8,7 +8,7 @@ import { join } from 'node:path'
 import * as main from './worker'
 import { focusTerminal, hostTaskTitles, listCliTerminals, listProjects, sendToTerminal, type Host } from './host'
 import { updateIfInstalledHere } from './setup'
-import type { ConfigPatch } from './protocol'
+import type { BoardView, ConfigPatch } from './protocol'
 
 /** The config schema version this release writes (bin/lib/migrate.mjs), so a bump needs no edit here. */
 const CONFIG_VERSION = Number(/CONFIG_VERSION = (\d+)/.exec(readFileSync(new URL('../../bin/lib/migrate.mjs', import.meta.url), 'utf8'))?.[1])
@@ -72,6 +72,17 @@ function stateFolder(): string {
   return dir
 }
 
+/** board.get answers at once with what the background refresh has; this refreshes them now and asks until every live source has answered once. */
+async function getLive(worker: Awaited<ReturnType<typeof mountWorker>>, input?: { seen?: string[] }): Promise<BoardView> {
+  await main.refreshLive()
+  for (let i = 0; i < 200; i++) {
+    const view = (await worker.request('board.get', input)) as BoardView
+    if (view.liveReady) return view
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error('live data never became ready')
+}
+
 async function withFakeOrca<T>(live: Live, run: (log: string) => Promise<T>, repos?: FakeRepo[], workers?: Record<string, unknown>[]): Promise<T> {
   const bin = mkdtempSync(join(tmpdir(), 'fake-orca-'))
   const log = fakeOrca(bin, { live, repos, workers })
@@ -89,7 +100,7 @@ test('board.get merges the board with live workers, liveness and panel.json', as
   await withFakeOrca(true, async () => {
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    const view = await worker.request('board.get')
+    const view = await getLive(worker)
     assert.equal(view.focus, 'DEMO-100 demo feature: merge api #42, then web #310')
     assert.equal(view.decisions?.length, 3)
     assert.equal(view.coordinatorLive, true)
@@ -114,8 +125,8 @@ test('board.get runs `bin/board reconcile` at most once a minute, without waitin
     writeFileSync(join(dir, 'bin', 'board'), `#!/bin/sh\necho "$@" >> "${runs}"\necho "gh down" >&2\nexit 1\n`)
     chmodSync(join(dir, 'bin', 'board'), 0o755)
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    const first = await worker.request('board.get')
-    await worker.request('board.get')
+    const first = await getLive(worker)
+    await getLive(worker)
     for (let waited = 0; !existsSync(runs) && waited < 5000; waited += 50) await new Promise((resolve) => setTimeout(resolve, 50))
     await new Promise((resolve) => setTimeout(resolve, 300))
     assert.equal(readFileSync(runs, 'utf8'), 'reconcile\n', 'two refreshes inside a minute: one run')
@@ -124,20 +135,81 @@ test('board.get runs `bin/board reconcile` at most once a minute, without waitin
   })
 })
 
+test('board.get answers at once from local files while the Orca CLI hangs, with the live parts marked not ready', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    const orca = join(process.env.ORCA_CLI_BIN_DIR as string, 'orca')
+    writeFileSync(orca, '#!/bin/sh\nexec sleep 20\n')
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    const started = Date.now()
+    const view = (await worker.request('board.get')) as BoardView
+    assert.ok(Date.now() - started < 1500, 'a hanging Orca CLI never delays the board')
+    assert.equal(view.decisions?.length, 3, 'the board itself is there')
+    assert.equal(view.liveReady, false, 'the live parts are placeholders until they answer')
+    assert.equal(view.canStart, false, 'no Start button from a placeholder')
+    await worker.deactivate()
+  })
+})
+
+test('board.get makes no CLI call at all: only the background refresh talks to Orca', async () => {
+  await withFakeOrca(true, async (log) => {
+    const dir = stateFolder()
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    await getLive(worker)
+    const before = readFileSync(log, 'utf8')
+    for (let i = 0; i < 5; i++) await worker.request('board.get')
+    assert.equal(readFileSync(log, 'utf8'), before, 'five reads, no new Orca call')
+    await worker.deactivate()
+  })
+})
+
+test('board.get: a live source that starts failing keeps its last value and shows no error', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    const good = await getLive(worker)
+    assert.deepEqual(good.workers.map((w) => w.dispatchId), ['ctx_1', 'ctx_2'])
+    writeFileSync(join(process.env.ORCA_CLI_BIN_DIR as string, 'orca'), '#!/bin/sh\necho down >&2\nexit 1\n')
+    await main.refreshLive()
+    const after = (await worker.request('board.get')) as BoardView & Record<string, unknown>
+    assert.deepEqual(after.workers.map((w) => w.dispatchId), ['ctx_1', 'ctx_2'], 'the last workers stay')
+    assert.equal(after.coordinatorLive, true, 'the last coordinator state stays')
+    assert.equal(after.stale, undefined, 'a failure of seconds is not even hinted')
+    assert.deepEqual(Object.keys(after).filter((key) => /error|warning/i.test(key)), [], 'nothing error-shaped in the view')
+    await worker.deactivate()
+  })
+})
+
+test('board.get: an unreadable board.json keeps the last good board silently; with none ever read it is the empty board', async () => {
+  await withFakeOrca(true, async () => {
+    const dir = stateFolder()
+    const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    const good = await getLive(worker)
+    writeFileSync(join(dir, 'board.json'), '{ "version": 2, "decisions": [')
+    const broken = (await worker.request('board.get')) as BoardView
+    assert.equal(broken.decisions?.length, good.decisions?.length)
+    await worker.deactivate()
+    const fresh = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
+    const empty = (await fresh.request('board.get')) as BoardView
+    assert.equal(empty.decisions, undefined, 'nothing was ever read: the empty board')
+    await fresh.deactivate()
+  })
+})
+
 test('board.get marks only Needs you ids the panel has not seen as new (none on the first load)', async () => {
   await withFakeOrca(true, async () => {
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    const first = await worker.request('board.get')
+    const first = await getLive(worker)
     assert.deepEqual([...(first.decisions ?? []), ...first.workers].filter((item) => item.isNew), [], 'what is there when the panel opens is not new')
-    const next = await worker.request('board.get', { seen: ['d:1', 'w:ctx_2'] })
+    const next = await getLive(worker, { seen: ['d:1', 'w:ctx_2'] })
     assert.deepEqual(
       (next.decisions ?? []).filter((d) => d.isNew).map((d) => d.id),
       [2],
       'decision 2 is pending and unseen; the answered decision 3 is not in Needs you'
     )
     assert.deepEqual(next.workers.filter((w) => w.isNew), [], 'a seen worker is not new, a working one is not in Needs you')
-    const seenAll = await worker.request('board.get', { seen: ['d:1', 'd:2', 'w:ctx_2'] })
+    const seenAll = await getLive(worker, { seen: ['d:1', 'd:2', 'w:ctx_2'] })
     assert.deepEqual([...(seenAll.decisions ?? []), ...seenAll.workers].filter((item) => item.isNew), [])
     await worker.deactivate()
   })
@@ -161,7 +233,7 @@ test('board.get: a known link host gets an icon label; an unknown host, a missin
       })
     )
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    const view = await worker.request('board.get')
+    const view = await getLive(worker)
     assert.deepEqual(
       view.tasks?.map((t) => [t.id, t.url, t.linkHost?.name]),
       [
@@ -192,7 +264,7 @@ test('board.get shows a board agent and the live worker doing the same work once
     ]
     writeFileSync(join(dir, 'board.json'), JSON.stringify(board))
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    const view = await worker.request('board.get')
+    const view = await getLive(worker)
     assert.deepEqual(view.agents?.map((a) => a.name), ['flag cleanup'], 'matched board agents are not shown a second time')
     assert.deepEqual(
       view.workers.map((w) => [w.dispatchId, w.repo, w.detail]),
@@ -245,7 +317,7 @@ test('board.send never types into a coordinator terminal that runs no agent: it 
     assert.deepEqual(await worker.request('board.send', { text: 'done 1' }), { sent: false, queued: true })
     assert.ok(!readFileSync(log, 'utf8').includes('terminal send'), 'nothing typed into the shell')
     assert.equal(readFileSync(join(dir, 'inbox.jsonl'), 'utf8').trim().split('\n').length, 1)
-    assert.equal((await worker.request('board.get')).coordinatorLive, false)
+    assert.equal((await getLive(worker)).coordinatorLive, false)
     await worker.deactivate()
   })
 })
@@ -269,7 +341,7 @@ test('board.send offline: queues a pending decision\'s option as a decision, nud
       ],
       'free text, an answered decision (3) and an unknown option (merge) are not turned into decisions'
     )
-    assert.equal((await worker.request('board.get')).coordinatorLive, false)
+    assert.equal((await getLive(worker)).coordinatorLive, false)
     await worker.deactivate()
   })
 })
@@ -636,7 +708,7 @@ test('board.get: Work lists each configured repo\'s uncommitted or unpushed work
     const workers = [{ dispatchId: 'ctx_a', state: 'running', outcome: 'in_progress', terminal: 'term_a', taskId: 'task_a' }, { dispatchId: 'ctx_x', state: 'running', terminal: 'term_x', taskId: 'task_x' }]
     await withFakeOrca(false, async () => {
       const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-      const view = await worker.request('board.get')
+      const view = await getLive(worker)
       assert.deepEqual(view.localWork, [
         { repo: 'dirty', branch: 'main', changed: 2, unpushed: 0 },
         { repo: 'ahead', branch: 'main', changed: 0, unpushed: 1 },
@@ -653,7 +725,7 @@ test('board.get: no config.yaml does not break the board, it only means no local
   await withHome(async () => {
     await withFakeOrca(true, async () => {
       const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
-      const view = await worker.request('board.get')
+      const view = await getLive(worker)
       assert.equal(view.decisions?.length, 3)
       assert.deepEqual(view.localWork, [])
       await worker.deactivate()
@@ -661,12 +733,12 @@ test('board.get: no config.yaml does not break the board, it only means no local
   })
 })
 
-test('board.get: a board.json that is not JSON shows an empty board with live workers instead of failing the panel', async () => {
+test('board.get: a board.json that is not JSON (and no good board seen) shows an empty board with live workers instead of failing the panel', async () => {
   await withFakeOrca(true, async () => {
     const dir = stateFolder()
     writeFileSync(join(dir, 'board.json'), '{"version": 2, "tasks": [')
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    const view = await worker.request('board.get')
+    const view = await getLive(worker)
     assert.equal(view.tasks, undefined)
     assert.deepEqual(view.workers.map((w) => w.dispatchId), ['ctx_1', 'ctx_2'])
     assert.equal(view.coordinatorLive, true)
@@ -886,7 +958,7 @@ test('board.get writes worker-terminals for the status line: each worker termina
   await withFakeOrca(true, async () => {
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    await worker.request('board.get')
+    await getLive(worker)
     assert.equal(readFileSync(join(dir, 'worker-terminals'), 'utf8'), 'term_w1\nterm_w2\n')
     await worker.deactivate()
   }, undefined, [
@@ -1104,10 +1176,10 @@ test('plugin update refreshes the plugin\'s own files only: stale agent links an
       assert.ok(!existsSync(join(home, '.config/opencode/skills/coordinator')), 'no new link in another agent')
       assert.equal(readFileSync(settings, 'utf8'), before, 'settings.json untouched')
 
-      assert.deepEqual((await worker.request('board.get')).staleLinks, ['~/.claude/skills/coordinator'])
+      assert.deepEqual((await getLive(worker)).staleLinks, ['~/.claude/skills/coordinator'])
       assert.deepEqual(await worker.request('setup.updateLinks'), { updated: ['~/.claude/skills/coordinator'] })
       assert.equal(readlinkSync(join(home, '.claude/skills/coordinator')), join(packageHome, 'skill/coordinator'))
-      assert.deepEqual((await worker.request('board.get')).staleLinks, [])
+      assert.deepEqual((await getLive(worker)).staleLinks, [])
       assert.ok(!existsSync(join(home, '.config/opencode/skills/coordinator')), 'Update links never creates a link')
       await worker.deactivate()
     })
@@ -1119,20 +1191,20 @@ test('board.get canStart: Start coordinator shows only when set up and not runni
     // Not set up: no config.yaml.
     await withFakeOrca(false, async () => {
       const worker = await mount(home)
-      assert.equal((await worker.request('board.get')).canStart, false, 'not set up')
+      assert.equal((await getLive(worker)).canStart, false, 'not set up')
       await worker.deactivate()
     })
     writeConfig(home)
     await withFakeOrca(false, async () => {
       const worker = await mount(home)
-      assert.equal((await worker.request('board.get')).canStart, true, 'set up, stopped')
+      assert.equal((await getLive(worker)).canStart, true, 'set up, stopped')
       await worker.deactivate()
     })
     mkdirSync(join(home, '.local/state/orca-coordinator'), { recursive: true })
     writeFileSync(join(home, '.local/state/orca-coordinator/coordinator-terminal'), 'term_coord\n')
     await withFakeOrca(true, async () => {
       const worker = await mount(home)
-      assert.equal((await worker.request('board.get')).canStart, false, 'running')
+      assert.equal((await getLive(worker)).canStart, false, 'running')
       await worker.deactivate()
     })
   })
@@ -1202,7 +1274,7 @@ const releases = (log: string) => readFileSync(log, 'utf8').split('\n').filter((
 test('board.closeSession: releases a finished-but-open session once; board.get lists it as idle before and not after', async () => {
   await withFakeOrca(true, async (log) => {
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
-    const before = (await worker.request('board.get')) as { workers: { dispatchId: string; status: string }[] }
+    const before = (await getLive(worker)) as { workers: { dispatchId: string; status: string }[] }
     assert.deepEqual(before.workers.map((w) => [w.dispatchId, w.status]), [['ctx_run', 'working'], ['ctx_done', 'idle']], 'the coordinator terminal is never listed')
     assert.deepEqual(await worker.request('board.closeSession', { dispatchId: 'ctx_done' }), { closed: true })
     assert.deepEqual(releases(log), ['orchestration worker-release --dispatch ctx_done'])
@@ -1228,7 +1300,7 @@ test('board.closeSession: when Orca fails to release, the request rejects and th
     writeFileSync(join(bin, 'orca'), script)
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
     await assert.rejects(worker.request('board.closeSession', { dispatchId: 'ctx_done' }), /release failed|Command failed/)
-    const view = (await worker.request('board.get')) as { workers: { dispatchId: string }[] }
+    const view = (await getLive(worker)) as { workers: { dispatchId: string }[] }
     assert.ok(view.workers.some((w) => w.dispatchId === 'ctx_done'), 'row kept')
     assert.equal(releases(log).length, 1, 'tried once, no retry')
     await worker.deactivate()
@@ -1275,7 +1347,7 @@ for (const tag of ['v1.0.0', 'v1.0.1']) {
         const config = join(home, '.config/orca-coordinator/config.yaml')
         const worker = await mount(home)
         const board = JSON.parse(readFileSync(join(state, 'board.json'), 'utf8'))
-        const view = await worker.request('board.get')
+        const view = await getLive(worker)
         assert.equal(view.focus, board.focus)
         assert.deepEqual(view.tasks?.map((t) => t.id), board.tasks.map((t: { id: string }) => t.id))
         assert.deepEqual(view.decisions?.map((d) => d.id), board.decisions.map((d: { id: number }) => d.id))
@@ -1322,14 +1394,14 @@ test('board.get: a board.json with the wrong types, or that is not an object, st
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
     writeFileSync(join(dir, 'board.json'), JSON.stringify({ version: 2, focus: 7, decisions: 'nope', tasks: [null, { id: 'A-1' }, 3], futureField: { a: 1 } }))
-    const view = (await worker.request('board.get')) as unknown as Record<string, unknown> & { tasks?: { id: string }[] }
+    const view = (await getLive(worker)) as unknown as Record<string, unknown> & { tasks?: { id: string }[] }
     assert.deepEqual(view.tasks, [{ id: 'A-1' }])
     assert.equal(view.decisions, undefined)
     assert.equal(view.focus, undefined)
     assert.deepEqual(view.futureField, { a: 1 })
     for (const junk of ['[]', 'null', '"text"', '{broken']) {
       writeFileSync(join(dir, 'board.json'), junk)
-      assert.equal((await worker.request('board.get')).coordinatorLive, true, junk)
+      assert.equal((await getLive(worker)).coordinatorLive, true, junk)
     }
     assert.deepEqual(worker.refusals, [])
     await worker.deactivate()
@@ -1439,7 +1511,7 @@ test('hostTaskTitles: agents.list task.title is keyed by the worker handle; agen
 test('board.get lists worker titles from the CLI when the host API gives no task (Orca 1.4.257)', async () => {
   await withFakeOrca(true, async () => {
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: stateFolder() } }) })
-    const view = await worker.request('board.get')
+    const view = await getLive(worker)
     assert.equal(view.workers.find((w) => w.terminal === 'term_w2')?.title, 'ticket-triage: morning')
     await worker.deactivate()
   })

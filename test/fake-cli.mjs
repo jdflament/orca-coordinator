@@ -14,6 +14,8 @@ if (!rule) {
   process.stderr.write(`fake ${cli}: no rule for ${args.join(' ')}\n`)
   process.exit(1)
 }
+// rule.exec: another program runs first (a writer touching the board while this call is slow).
+if (rule.exec) spawnSync(rule.exec[0], rule.exec.slice(1), { stdio: 'ignore' })
 let out = rule.stdout ?? ''
 const q = Math.max(args.indexOf('--jq'), args.indexOf('-q'))
 if (cli === 'gh' && q !== -1 && (rule.status ?? 0) === 0) {

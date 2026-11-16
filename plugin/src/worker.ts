@@ -166,15 +166,6 @@ function isCoveredByTask(board: Board, work: LocalWork): boolean {
   return (board.tasks ?? []).some((task) => task.repo === work.repo && (task.branch ? task.branch.toLowerCase() === branch : branch.includes(String(task.id).toLowerCase())))
 }
 
-/** Local git work per configured repo (Orca's workers are in Agents, not repeated in Work). config.repos holds git repositories only: readConfig drops any other entry. */
-async function getDerivedWork(board: Board): Promise<{ localWork: LocalWork[] }> {
-  const config = await getConfig().catch(() => null)
-  if (!config) return { localWork: [] }
-  const repos = (config.repos ?? []).filter((repo) => repo.name && repo.path)
-  const local = await Promise.all(repos.map((repo) => getLocalWork(repo)))
-  return { localWork: local.filter((work): work is LocalWork => work !== null && !isCoveredByTask(board, work)) }
-}
-
 /**
  * Live = the terminal is connected, not orphaned, and an agent runs in it (as route.sh checks).
  * A connected terminal without an agent is a bare shell: typed text would run as a command.
@@ -231,6 +222,113 @@ async function readJson<T>(file: string, fallback: T): Promise<T> {
     .catch(() => fallback)
 }
 
+/** Settles with the promise, or rejects once `ms` passed (the slow call is left to finish on its own). */
+function withDeadline<T>(promise: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} took longer than ${Math.round(ms / 1000)}s`)), ms)
+  })
+  return Promise.race([promise, late]).finally(() => clearTimeout(timer))
+}
+
+let lastGood: { file: string; board: Board } | null = null
+
+/**
+ * board.json, local file only: a missing file is an empty board; an unreadable or invalid one keeps the last
+ * good board, silently (saves are atomic, so this is rare), and an empty board when none was ever read.
+ */
+async function readBoardFile(file: string): Promise<Board> {
+  try {
+    const board = sanitizeBoard(JSON.parse(await readFile(file, 'utf8')))
+    lastGood = { file, board }
+    return board
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return sanitizeBoard(null)
+    return lastGood?.file === file ? lastGood.board : sanitizeBoard(null)
+  }
+}
+
+// ---- live data: refreshed in the background, never on the read path ----
+//
+// board.get reads local files and merges what the cache holds. Each source (Orca workers, the coordinator
+// terminal, local git work, the config) refreshes on its own schedule with its own deadline and keeps its last
+// value when it is slow or fails; a source that hangs delays nothing but itself.
+
+const LIVE_EVERY_MS = 10000
+const STALE_AFTER_MS = 3 * 60000
+const DEADLINES = { workers: 8000, coordinator: 8000, local: 10000, setup: 8000 }
+
+interface Cell<T> {
+  value: T
+  /** The first attempt finished (ok or not): until then the value is a placeholder. */
+  settled: boolean
+  okAt: number
+  failingSince: number
+  running: boolean
+}
+
+const cell = <T>(value: T): Cell<T> => ({ value, settled: false, okAt: 0, failingSince: 0, running: false })
+
+type SetupState = { config: CoordinatorSettings | null; staleLinks: string[] }
+
+function freshLive() {
+  return {
+    workers: cell<Awaited<ReturnType<typeof listWorkers>> | null>(null),
+    coordinator: cell(false),
+    local: cell<LocalWork[]>([]),
+    setup: cell<SetupState>({ config: null, staleLinks: [] })
+  }
+}
+
+let live = freshLive()
+let liveTimer: ReturnType<typeof setInterval> | undefined
+
+/** One refresh of one source; skipped while the previous one is still running; a failure keeps the last value. */
+async function refreshCell<T>(target: Cell<T>, ms: number, what: string, load: () => Promise<T>): Promise<void> {
+  if (target.running) return
+  target.running = true
+  try {
+    target.value = await withDeadline(load(), ms, what)
+    target.okAt = Date.now()
+    target.failingSince = 0
+  } catch {
+    if (!target.failingSince) target.failingSince = Date.now()
+  } finally {
+    target.settled = true
+    target.running = false
+  }
+}
+
+/** Raw local git work per configured repo (config.repos holds git repositories only: readConfig drops any other entry). */
+async function readLocalWork(): Promise<LocalWork[]> {
+  const config = await getConfig()
+  const repos = (config?.repos ?? []).filter((repo) => repo.name && repo.path)
+  return (await Promise.all(repos.map((repo) => getLocalWork(repo)))).filter((work): work is LocalWork => work !== null)
+}
+
+export function refreshLive(): Promise<unknown> {
+  const sources = live
+  return Promise.all([
+    refreshCell(sources.workers, DEADLINES.workers, 'Listing the workers', () => listWorkers()),
+    refreshCell(sources.coordinator, DEADLINES.coordinator, 'Checking the coordinator', async () => {
+      const handle = await getCoordinatorHandle().catch(() => '')
+      return handle ? getIsCoordinatorLive(handle) : false
+    }),
+    refreshCell(sources.local, DEADLINES.local, 'Reading local work', readLocalWork),
+    refreshCell(sources.setup, DEADLINES.setup, 'Reading the config', async () => {
+      const config = await getConfig()
+      return { config, staleLinks: config ? await staleSkillLinks() : [] }
+    })
+  ])
+}
+
+/** Whole minutes a source has been failing, once that is more than a few minutes; else undefined. */
+function staleMinutes(...cells: Cell<unknown>[]): number | undefined {
+  const nowMs = Date.now()
+  const ages = cells.filter((c) => c.failingSince && nowMs - c.failingSince > STALE_AFTER_MS).map((c) => Math.floor((nowMs - (c.okAt || c.failingSince)) / 60000))
+  return ages.length ? Math.max(...ages) : undefined
+}
+
 type PanelJson = { repoColors?: Record<string, string>; oncallLabel?: string }
 
 /** Each item keeps its own url (written by the coordinator); a known host adds an icon and a label. */
@@ -262,20 +360,30 @@ export function sanitizeBoard(raw: unknown): Board {
 }
 
 const RECONCILE_EVERY_MS = 60000
-const RECONCILE_TIMEOUT_MS = 10000
+// Above the budget bin/board reconcile gives itself (RECONCILE_BUDGET_MS there), so it ends on its own, not killed mid-way.
+const RECONCILE_TIMEOUT_MS = 20000
 let lastReconcile = 0
+let reconciling = false
 
 /**
- * Settles decisions whose "settles when" is met (`bin/board reconcile`: gh, no model). At most once
- * a minute, short timeout, never awaited by the render; a failure is logged, never shown.
+ * Settles decisions whose "settles when" is met (`bin/board reconcile`: gh, no model). Runs from the background
+ * tick, at most once a minute and never twice at once; a failure is logged, never shown.
  */
 function reconcileDecisions(dir: string): void {
   const nowMs = Date.now()
-  if (nowMs - lastReconcile < RECONCILE_EVERY_MS) return
+  if (reconciling || nowMs - lastReconcile < RECONCILE_EVERY_MS) return
   lastReconcile = nowMs
+  reconciling = true
   execFile(path.join(dir, 'bin', 'board'), ['reconcile'], { timeout: RECONCILE_TIMEOUT_MS }, (error, _stdout, stderr) => {
+    reconciling = false
     if (error || String(stderr).trim()) console.error(`coordinator: reconcile: ${String(stderr).trim() || error?.message}`)
   })
+}
+
+async function liveTick(): Promise<void> {
+  const dir = await stateDir().catch(() => '')
+  if (dir) reconcileDecisions(dir)
+  await refreshLive()
 }
 
 /** Marks what is new to this panel session: `seen` is what it already showed; no `seen` (the first load) marks nothing. */
@@ -286,18 +394,19 @@ function markNew(view: BoardView, seen: string[] | undefined): void {
   for (const worker of view.workers) if (worker.needsInput && !known.has(`w:${worker.dispatchId}`)) worker.isNew = true
 }
 
+/** The board as the panel shows it: local files plus the last values of the live sources. Calls no CLI, git or gh. */
 async function getBoard(seen?: string[]): Promise<BoardView> {
   const dir = await stateDir()
-  reconcileDecisions(dir)
-  const board = sanitizeBoard(await readJson<unknown>(path.join(dir, 'board.json'), null))
+  const board = await readBoardFile(path.join(dir, 'board.json'))
   const read = await readJson<PanelJson>(path.join(dir, 'panel.json'), {})
   const panel: PanelJson = read && typeof read === 'object' ? read : {}
   const dataProblems = (await Promise.all([describeStored(path.join(dir, 'board.json'), BOARD_VERSION), describeStored(path.join(dir, 'panel.json'))])).filter(Boolean)
   const handle = await getCoordinatorHandle().catch(() => '')
-  const [list, coordinatorLive] = await Promise.all([listWorkers().catch(() => null), handle ? getIsCoordinatorLive(handle).catch(() => false) : Promise.resolve(false)])
-  const config = await getConfig().catch(() => null)
-  const derived = await getDerivedWork(board).catch(() => ({ localWork: [] }))
-  const { workers, agents } = mergeBoardAgents(list ? getActiveWorkers(list, handle) : [], board.agents ?? [])
+  const localWork = live.local.value.filter((work) => !isCoveredByTask(board, work))
+  const { workers, agents } = mergeBoardAgents(live.workers.value ? getActiveWorkers(live.workers.value, handle) : [], board.agents ?? [])
+  const coordinatorLive = live.coordinator.value
+  const { config, staleLinks } = live.setup.value
+  const stale = { workers: staleMinutes(live.workers, live.coordinator), localWork: staleMinutes(live.local) }
   const view: BoardView = {
     ...board,
     decisions: withLinkHosts(board.decisions),
@@ -306,13 +415,15 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
     repos: withLinkHosts(board.repos),
     agents,
     workers,
-    ...derived,
+    localWork,
     coordinatorLive,
-    canStart: config !== null && !coordinatorLive,
-    staleLinks: config ? await staleSkillLinks() : [],
+    canStart: live.setup.settled && live.coordinator.settled && config !== null && !coordinatorLive,
+    staleLinks,
     repoColors: panel.repoColors && typeof panel.repoColors === 'object' && !Array.isArray(panel.repoColors) ? panel.repoColors : {},
     oncallLabel: typeof panel.oncallLabel === 'string' ? panel.oncallLabel : '',
-    dataProblems
+    dataProblems,
+    liveReady: [live.workers, live.coordinator, live.local, live.setup].every((c) => c.settled),
+    ...(stale.workers !== undefined || stale.localWork !== undefined ? { stale: Object.fromEntries(Object.entries(stale).filter(([, v]) => v !== undefined)) } : {})
   }
   markNew(view, seen)
   return view
@@ -457,6 +568,11 @@ export default function activate(orca: OrcaWorkerApi): void {
   host = orca.host
   // Orca installed a new version of the plugin: migrate stored data, then refresh the plugin's own files (never agent config, never setup).
   void updateIfInstalledHere().catch(() => undefined)
+  // Live data and reconcile run here, on their own clock, never inside board.get.
+  clearInterval(liveTimer)
+  void liveTick().catch(() => undefined)
+  liveTimer = setInterval(() => void liveTick().catch(() => undefined), LIVE_EVERY_MS)
+  liveTimer.unref?.()
 
   orca.panels.handle('setup.status', async () => getSetupStatus(runOrca, host, await getCoordinatorHandle().catch(() => '')))
   orca.panels.handle('setup.run', (options) => runSetup(options ?? { workspace: '' }))
@@ -497,7 +613,11 @@ export default function activate(orca: OrcaWorkerApi): void {
 }
 
 export function deactivate(): void {
+  clearInterval(liveTimer)
+  live = freshLive()
+  lastGood = null
   lastReconcile = 0
+  reconciling = false
   settings = null
   host = null
 }

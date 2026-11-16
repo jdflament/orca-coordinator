@@ -46,7 +46,9 @@ const REPO_KINDS = enumOf(SCHEMA.properties.repos.items.properties.kind)
 const INSTRUCTION_STATES = enumOf(SCHEMA.properties.instructions.items.properties.status)
 
 const SETTLES_WHEN = enumOf(SCHEMA.properties.decisions.items.properties.settlesWhen)
-const GH_TIMEOUT_MS = 15000
+const GH_TIMEOUT_MS = 6000
+// reconcile checks decisions one gh call at a time: past this it stops and the next run continues.
+const RECONCILE_BUDGET_MS = 15000
 const PR_URL = /^https:\/\/github\.com\/[^/]+\/[^/]+\/pull\/\d+/
 
 const list = (value) => (Array.isArray(value) ? value : [])
@@ -100,7 +102,10 @@ function save(board) {
   const problems = validateAgainst(SCHEMA, board)
   if (problems.length) throw new Error(`refusing to write an invalid board:\n  ${problems.join('\n  ')}`)
   fs.mkdirSync(path.dirname(BOARD_FILE), { recursive: true })
-  fs.writeFileSync(BOARD_FILE, JSON.stringify(board, null, 2) + '\n')
+  // Written aside and renamed: a reader (the panel) sees the old board or the new one, never a half-written file.
+  const tmp = `${BOARD_FILE}.tmp-${process.pid}`
+  fs.writeFileSync(tmp, JSON.stringify(board, null, 2) + '\n')
+  fs.renameSync(tmp, BOARD_FILE)
   render(board)
 }
 
@@ -599,8 +604,14 @@ const commands = {
       }
     })()
     const settled = []
+    const met_ = []
+    const started = Date.now()
     for (const d of board.decisions) {
       if (d.status !== 'pending' || !d.settlesWhen) continue
+      if (Date.now() - started > RECONCILE_BUDGET_MS) {
+        console.error('board: reconcile: out of time, the rest is checked next run')
+        break
+      }
       const result = spawnSync('gh', ['pr', 'view', d.url, '--json', 'state,reviews'], { encoding: 'utf8', timeout: GH_TIMEOUT_MS })
       if (result.error || result.status !== 0) {
         console.error(`board: reconcile: gh failed for decision ${d.id}: ${(result.error?.message || result.stderr || '').trim()}`)
@@ -615,15 +626,23 @@ const commands = {
       }
       const reviewed = list(pr.reviews).some((r) => me && r.author?.login === me && r.state !== 'PENDING')
       const met = { 'pr-merged': pr.state === 'MERGED', 'pr-closed': pr.state === 'MERGED' || pr.state === 'CLOSED', 'pr-reviewed': reviewed }[d.settlesWhen]
-      if (!met) continue
-      d.status = 'answered'
-      d.answer = 'Settled'
-      d.answeredAt = now()
-      d.note = `settled automatically: ${d.settlesWhen}`
-      log(board, `decision ${d.id} settled: ${d.settlesWhen}`)
-      settled.push(d.id)
+      if (met) met_.push(d)
     }
-    if (settled.length) save(board)
+    if (met_.length) {
+      // The gh calls above can take a while and the coordinator writes the board meanwhile: apply to a fresh read, never to the one from before.
+      const fresh = load()
+      for (const m of met_) {
+        const d = fresh.decisions.find((x) => String(x.id) === String(m.id))
+        if (!d || d.status !== 'pending') continue
+        d.status = 'answered'
+        d.answer = 'Settled'
+        d.answeredAt = now()
+        d.note = `settled automatically: ${d.settlesWhen}`
+        log(fresh, `decision ${d.id} settled: ${d.settlesWhen}`)
+        settled.push(d.id)
+      }
+      if (settled.length) save(fresh)
+    }
     for (const id of settled) console.log(`settled ${id}`)
     // Retention: finished items older than board.retentionHours leave the board (model-free, rides the panel's refresh).
     const hours = retentionHours()

@@ -232,6 +232,23 @@ test('board reconcile: a failing gh changes nothing, writes nothing and exits 0'
   assert.equal(fs.readFileSync(b.file, 'utf8'), before)
 })
 
+test('board reconcile: a slow gh call does not wipe what the coordinator wrote to the board meanwhile', () => {
+  const { run, b } = reconcileBox([{ match: ['pr', 'view', PR(1)], stdout: JSON.stringify({ state: 'MERGED', reviews: [] }), exec: [process.execPath, BOARD, 'log', 'written while gh was slow'] }])
+  run('ask', 'PROJ-1', '--url', PR(1), '--settles-when', 'pr-merged')
+  assert.equal(run('reconcile').out, 'settled 1')
+  const board = b.read()
+  assert.equal(board.decisions[0].status, 'answered')
+  assert.ok(board.log.some((entry) => entry.text === 'written while gh was slow'), 'the concurrent write survived the settle')
+})
+
+test('board save: a reader never sees a half-written board.json (written aside, renamed in place)', () => {
+  const b = boardIn()
+  b.run('init')
+  b.run('log', 'one')
+  assert.deepEqual(fs.readdirSync(path.dirname(b.file)).filter((f) => f.includes('.tmp-')), [], 'no temp file is left behind')
+  assert.ok(b.read().log.some((entry) => entry.text === 'one'))
+})
+
 test('board ask --settles-when: an unknown condition or a url that is not a GitHub PR is refused and nothing is written', () => {
   const b = boardIn()
   b.run('init')
