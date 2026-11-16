@@ -7,7 +7,7 @@ import { appendFileSync, mkdirSync } from 'node:fs'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
-import type { Board, BoardRemoval, BoardRemoveKind, BoardView, CleanupResult, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
+import type { Board, BoardRemoval, BoardRemoveKind, BoardView, CleanupResult, CleanupScope, CoordinatorSettings, LiveWorker, LocalWork } from './protocol'
 import { focusTerminal, hostTaskTitles, listCliTerminals, listReportedAgents, sendToTerminal } from './host'
 import { configFile, expandHome, getSetupStatus, modelFor, listOrcaRepos, readConfig, readSettings, removeSkippedRepo, runSetup, saveSettings, staleSkillLinks, updateIfInstalledHere, updateLinks } from './setup'
 import { linkHost } from './links'
@@ -319,9 +319,9 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
 }
 
 /** Runs <dir>/bin/cleanup (with -n: a dry run that changes nothing) and reads its summary line. */
-function runCleanup(dir: string, dryRun: boolean): Promise<CleanupResult> {
+function runCleanup(dir: string, dryRun: boolean, scope?: CleanupScope): Promise<CleanupResult> {
   return new Promise((resolve, reject) => {
-    execFile('/bin/bash', [path.join(dir, 'bin', 'cleanup'), ...(dryRun ? ['-n'] : [])], { timeout: 300000 }, (error, stdout) => {
+    execFile('/bin/bash', [path.join(dir, 'bin', 'cleanup'), ...(dryRun ? ['-n'] : []), ...(scope ? [`--${scope}`] : [])], { timeout: 300000 }, (error, stdout) => {
       if (error) return reject(error)
       const lines = String(stdout).trim().split('\n').filter(Boolean)
       const summary = lines.at(-1) ?? ''
@@ -488,7 +488,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('board.remove', ({ kind, id }) => removeBoardItem(kind, String(id ?? '')))
   orca.panels.handle('board.closeSession', ({ dispatchId }) => closeSession(String(dispatchId ?? '')))
   orca.panels.handle('board.restore', ({ removal }) => restoreBoardItem(removal))
-  orca.panels.handle('board.cleanup', async (input) => runCleanup(await stateDir(), input?.dryRun === true))
+  orca.panels.handle('board.cleanup', async (input) => runCleanup(await stateDir(), input?.dryRun === true, ['workspaces', 'sessions', 'board'].includes(input?.scope as string) ? input?.scope : undefined))
 
   orca.panels.handle('board.switch', async ({ terminal }) => {
     await focusTerminal(host, cliRun, terminal || (await getCoordinatorHandle()))

@@ -202,7 +202,7 @@
   </head>
   <body>
     <main>
-      <header><span id="dot" class="dot"></span><strong>Coordinator</strong><span id="updated" class="meta">loading</span><button id="start" class="primary" hidden>Start coordinator</button><button id="more" class="icon" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"></button><div id="more-menu" class="menu" role="menu" hidden><button id="cleanup" role="menuitem" title="Shows what it would close, remove and archive first; nothing changes until you confirm">Clean up…</button></div><button id="open" class="icon" title="Open coordinator"></button><button id="gear" class="icon" title="Settings" hidden></button></header>
+      <header><span id="dot" class="dot"></span><strong>Coordinator</strong><span id="updated" class="meta">loading</span><button id="start" class="primary" hidden>Start coordinator</button><button id="more" class="icon" title="More actions" aria-label="More actions" aria-haspopup="menu" aria-expanded="false"></button><div id="more-menu" class="menu" role="menu" hidden><button id="cleanup-workspaces" role="menuitem" title="Shows which worktrees of finished work it would remove first; nothing changes until you confirm">Clean up Orca workspaces…</button><button id="cleanup-sessions" role="menuitem" title="Shows which inactive worker sessions it would close first; nothing changes until you confirm">Clean up inactive sessions…</button><button id="cleanup-board" role="menuitem" title="Shows which finished items it would archive first; nothing changes until you confirm">Clean up board…</button></div><button id="open" class="icon" title="Open coordinator"></button><button id="gear" class="icon" title="Settings" hidden></button></header>
       <div id="plan" class="plan" hidden></div>
       <div id="result" class="result"></div>
       <div id="links" class="notice" hidden></div>
@@ -780,25 +780,27 @@
         node.replaceChildren(fold, button('×', () => node.replaceChildren(), 'icon'))
       }
 
-      function getCleanupMessage(summary) {
-        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
-        const counts = text(summary).match(/released (\d+) sessions, removed (\d+) worktrees, kept (\d+)(?:[^,]*, archived (\d+))?/)
-        if (!counts) return 'Cleaned ' + time + ' · ' + text(summary)
-        const archived = counts[4] || '0'
-        if (counts[1] === '0' && counts[2] === '0' && archived === '0') return 'Nothing to clean ' + time + ' · kept ' + counts[3]
-        return 'Cleaned ' + time + ' · released ' + counts[1] + ' sessions, removed ' + counts[2] + ' worktrees, archived ' + archived + ' board items, kept ' + counts[3]
-      }
-
       const plural = (n, one, many) => n + ' ' + (n === 1 ? one : many)
 
-      // "Close 3 finished worker tabs · Remove 1 merged worktree" from a dry run's counts; '' = nothing to do.
-      function getCleanupPlan(counts) {
-        if (!counts) return ''
-        const steps = []
-        if (counts.released > 0) steps.push('Close ' + plural(counts.released, 'finished worker tab', 'finished worker tabs'))
-        if (counts.removed > 0) steps.push('Remove ' + plural(counts.removed, 'done worktree', 'done worktrees'))
-        if (counts.archived > 0) steps.push('Archive ' + plural(counts.archived, 'finished board item', 'finished board items'))
-        return steps.join(' · ')
+      // What each clean up does, and the count that says it did something.
+      const CLEANUPS = {
+        workspaces: { label: 'Orca workspaces', count: 'removed', plan: (n) => 'Remove ' + plural(n, 'done worktree', 'done worktrees'), done: (n) => 'removed ' + plural(n, 'worktree', 'worktrees') },
+        sessions: { label: 'inactive sessions', count: 'released', plan: (n) => 'Close ' + plural(n, 'inactive worker session', 'inactive worker sessions'), done: (n) => 'closed ' + plural(n, 'session', 'sessions') },
+        board: { label: 'board', count: 'archived', plan: (n) => 'Archive ' + plural(n, 'finished board item', 'finished board items'), done: (n) => 'archived ' + plural(n, 'board item', 'board items') }
+      }
+
+      function getCleanupMessage(scope, result) {
+        const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false })
+        const n = result?.counts?.[CLEANUPS[scope].count]
+        if (n === undefined) return 'Cleaned ' + time + ' · ' + text(result?.summary)
+        if (n === 0) return 'Nothing to clean ' + time
+        return 'Cleaned ' + time + ' · ' + CLEANUPS[scope].done(n)
+      }
+
+      // "Remove 1 done worktree" from a dry run's counts; '' = nothing to do.
+      function getCleanupPlan(scope, counts) {
+        const n = counts?.[CLEANUPS[scope].count]
+        return n > 0 ? CLEANUPS[scope].plan(n) : ''
       }
 
       function closePlan() {
@@ -806,19 +808,19 @@
         byId('plan').replaceChildren()
       }
 
-      // Step 1: a dry run (changes nothing) shows what Clean up would do; Confirm runs it.
-      async function previewCleanup() {
+      // Step 1: a dry run (changes nothing) shows what the clean up would do; Confirm runs it.
+      async function previewCleanup(scope) {
         const plan = byId('plan')
         byId('result').replaceChildren()
         plan.hidden = false
         plan.replaceChildren(el('div', 'muted', 'Checking what can be cleaned up…'))
         plan.firstChild.prepend(el('span', 'spinner'))
         try {
-          const result = await request('board.cleanup', { dryRun: true })
-          const what = getCleanupPlan(result?.counts)
-          const kept = result?.counts?.kept ? el('div', 'kept', 'Keeps ' + plural(result.counts.kept, 'worktree', 'worktrees') + ' with open PRs, local changes or unpushed commits') : null
+          const result = await request('board.cleanup', { dryRun: true, scope })
+          const what = getCleanupPlan(scope, result?.counts)
+          const kept = scope === 'workspaces' && result?.counts?.kept ? el('div', 'kept', 'Keeps ' + plural(result.counts.kept, 'worktree', 'worktrees') + ' with open PRs, local changes or unpushed commits') : null
           if (!result?.counts) {
-            plan.replaceChildren(el('div', 'what', text(result?.summary) || 'Could not tell what Clean up would do'), el('div', 'actions'))
+            plan.replaceChildren(el('div', 'what', text(result?.summary) || 'Could not tell what clean up would do'), el('div', 'actions'))
           } else if (!what) {
             plan.replaceChildren(el('div', 'what', 'Nothing to clean up'), ...(kept ? [kept] : []), el('div', 'actions'))
           } else {
@@ -831,7 +833,7 @@
             plan.querySelector('.actions').before(fold)
           }
           const actions = plan.querySelector('.actions')
-          if (what) actions.append(button('Confirm', () => void runCleanup(), 'primary'))
+          if (what) actions.append(button('Confirm', () => void runCleanup(scope), 'primary'))
           actions.append(button(what ? 'Cancel' : 'OK', closePlan))
         } catch (error) {
           closePlan()
@@ -840,13 +842,13 @@
       }
 
       // Step 2: after Confirm, the real run and its result line.
-      async function runCleanup() {
+      async function runCleanup(scope) {
         const plan = byId('plan')
         for (const node of plan.querySelectorAll('button')) node.disabled = true
         plan.querySelector('.actions')?.prepend(el('span', 'spinner'))
         try {
-          const result = await request('board.cleanup', { dryRun: false })
-          showResult(getCleanupMessage(result?.summary), result?.actions, false)
+          const result = await request('board.cleanup', { dryRun: false, scope })
+          showResult(getCleanupMessage(scope, result), result?.actions, false)
         } catch (error) {
           showResult('Cleanup failed: ' + error.message, [], true)
         } finally {
@@ -1244,13 +1246,13 @@
       function setMenuOpen(open) {
         byId('more-menu').hidden = !open
         byId('more').setAttribute('aria-expanded', String(open))
-        if (open) byId('cleanup').focus()
+        if (open) byId('cleanup-workspaces').focus()
       }
       byId('more').innerHTML = ICONS.more
       byId('more').onclick = (event) => { event.stopPropagation(); setMenuOpen(byId('more-menu').hidden) }
       document.addEventListener('click', (event) => { if (!byId('more-menu').contains(event.target)) setMenuOpen(false) })
       document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !byId('more-menu').hidden) { setMenuOpen(false); byId('more').focus() } })
-      byId('cleanup').onclick = () => { setMenuOpen(false); void previewCleanup() }
+      for (const scope of Object.keys(CLEANUPS)) byId('cleanup-' + scope).onclick = () => { setMenuOpen(false); void previewCleanup(scope) }
       byId('start').onclick = () => void startCoordinator()
       byId('open').innerHTML = ICONS.terminal
       byId('open').onclick = () => request('board.switch', {})

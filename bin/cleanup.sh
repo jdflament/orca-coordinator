@@ -7,14 +7,27 @@
 # live worker or open terminal. Merged tasks and answered decisions move to archive/done-YYYY-MM.md.
 # Never the main checkout, the coordinator terminal, a live worker,
 # --force or --delete-branch.
-#   cleanup.sh [-n|--dry-run]   (dry run: "would release …" / "would remove …" / "kept <name>: <why>"
+#   cleanup.sh [-n|--dry-run] [--sessions] [--workspaces] [--board]
+#   Scope: --sessions closes settled worker terminals, --workspaces removes done worktrees,
+#   --board archives finished board items (flags combine; no scope flag = all three, as before).
+#   Every scope prints the same summary line; the counts of scopes that did not run are 0.
+#   (dry run: "would release …" / "would remove …" / "kept <name>: <why>"
 #   lines and the same summary line; changes nothing)
 source "$(dirname "${BASH_SOURCE[0]}")/lib/env.sh"
 COORDINATOR=$(cat "$STATE/coordinator-terminal" 2>/dev/null || true)
 ROOT="${CFG_paths_worktreeRoot%/}/"
 [ "$ROOT" != "/" ] || ROOT=""
-DRY=0
-case "${1:-}" in -n|--dry-run) DRY=1 ;; esac
+DRY=0 SC_SESSIONS=0 SC_WORKSPACES=0 SC_BOARD=0
+for arg in "$@"; do
+  case "$arg" in
+    -n|--dry-run) DRY=1 ;;
+    --sessions) SC_SESSIONS=1 ;;
+    --workspaces) SC_WORKSPACES=1 ;;
+    --board) SC_BOARD=1 ;;
+    *) echo "cleanup: unknown option $arg (use -n, --sessions, --workspaces, --board)" >&2; exit 2 ;;
+  esac
+done
+[ $((SC_SESSIONS + SC_WORKSPACES + SC_BOARD)) -gt 0 ] || SC_SESSIONS=1 SC_WORKSPACES=1 SC_BOARD=1
 RELEASED=released REMOVED=removed
 [ "$DRY" = 1 ] && RELEASED="would release" REMOVED="would remove"
 run() { if [ "$DRY" = 1 ]; then echo "dry-run: $*" >&2; else "$@" >/dev/null 2>&1; fi; }
@@ -25,6 +38,7 @@ WORKERS=$("$ORCA" orchestration worker-list --json --limit 100 2>/dev/null || tr
 RELEASING=" "
 while IFS=$'\t' read -r dispatch terminal wstate; do
   [ -n "$dispatch" ] || continue
+  [ "$SC_SESSIONS" = 1 ] || continue
   run "$ORCA" orchestration worker-release --dispatch "$dispatch" && released=$((released + 1)) && RELEASING="$RELEASING$terminal " && echo "workers: $RELEASED $dispatch ($wstate)"
 done < <(jq -r --arg c "$COORDINATOR" \
   '.result.workers[]? | select((.state != "ready" and .state != "running") and .liveness != "live" and .terminalState == "retained" and .terminal != null and .terminal != $c) | [.dispatchId, .terminal, .state] | @tsv' <<<"$WORKERS")
@@ -50,6 +64,7 @@ default_ref() {
 }
 
 while IFS=$'\t' read -r path branch; do
+  [ "$SC_WORKSPACES" = 1 ] || break
   [ -n "$path" ] || continue
   [ -z "$ROOT" ] || case "$path" in "$ROOT"*) ;; *) continue ;; esac
   if [ -n "$ROOT" ]; then name="${path#"$ROOT"}"; else name="$(basename "$(dirname "$path")")/$(basename "$path")"; fi
@@ -90,6 +105,7 @@ done < <(jq -r '.result.worktrees[]? | select(.isMainWorktree | not) | [.path, .
 
 # Stale entries (a worktree folder that is gone, e.g. a temp scratchpad) are dropped from each repo.
 while IFS= read -r repo; do
+  [ "$SC_WORKSPACES" = 1 ] || break
   [ -d "$repo/.git" ] || continue
   if [ "$DRY" = 1 ]; then flags=(--dry-run -v); verb="would prune"; else flags=(-v); verb="pruned"; fi
   while IFS= read -r line; do
@@ -101,7 +117,7 @@ done < <(jq -r '.result.worktrees[]? | select(.isMainWorktree) | .path' <<<"$LIS
 board_flags=(); [ "$DRY" = 1 ] && board_flags=(--dry-run)
 while IFS= read -r line; do
   case "$line" in "would archive "*|"archived "*) archived=$((archived + 1)); echo "board: $line" ;; esac
-done < <(COORDINATOR_STATE="$STATE" COORDINATOR_PACKAGE="$PKG" "$NODE_BIN" "$PKG/bin/board.mjs" archive ${board_flags[@]+"${board_flags[@]}"} 2>/dev/null)
+done < <([ "$SC_BOARD" = 1 ] && COORDINATOR_STATE="$STATE" COORDINATOR_PACKAGE="$PKG" "$NODE_BIN" "$PKG/bin/board.mjs" archive ${board_flags[@]+"${board_flags[@]}"} 2>/dev/null)
 
 echo "released $released sessions, removed $removed worktrees, kept $kept (dirty/open/unpushed), archived $archived board items"
 
