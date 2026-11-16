@@ -9,7 +9,8 @@ import test from 'node:test'
 import vm from 'node:vm'
 import { BOARD_VERSION, CONFIG_VERSION, backupOnce, migrateBoardFile, migrateConfigFile, runSteps } from '../bin/lib/migrate.mjs'
 import { availableOptionalRules, enabledOptionalRules } from '../bin/lib/config.mjs'
-import { OPTIONAL_RULES_AT_V2 } from '../bin/lib/migrate.mjs'
+import { JOBS_AT_V3, OPTIONAL_RULES_AT_V2 } from '../bin/lib/migrate.mjs'
+import { parseYaml } from '../bin/lib/yaml.mjs'
 import { ROOT, sandbox } from './helpers.mjs'
 
 const FIXTURES = path.join(ROOT, 'test', 'fixtures', 'upgrade')
@@ -70,7 +71,7 @@ for (const tag of TAGS) {
     assert.equal(config.myTeamNotes?.keep, true, 'unknown keys survive the read')
     const stored = Number(/^schemaVersion:\s*(\d+)/m.exec(original)?.[1] ?? 0)
     const migrates = stored < CONFIG_VERSION
-    if (migrates) {
+    if (stored < 2) {
       // rules.optional was implicit (missing = all on); the migration writes it out, so the install keeps every optional rule it had.
       assert.deepEqual(config.rules.optional, OPTIONAL_RULES_AT_V2)
       assert.ok(OPTIONAL_RULES_AT_V2.every((name) => availableOptionalRules().includes(name)))
@@ -126,13 +127,13 @@ test('migration v2: an existing rules.optional is kept, a rules block without it
   const file = path.join(box.dir, 'config.yaml')
   fs.writeFileSync(file, '# mine\nschemaVersion: 1\nperson:\n  name: A\nrules:\n  optional: [drafts]\n')
   assert.equal(migrateConfigFile(file).migrated, true)
-  assert.equal(fs.readFileSync(file, 'utf8'), '# mine\nschemaVersion: 2\nperson:\n  name: A\nrules:\n  optional: [drafts]\n', 'a user choice is never replaced')
+  assert.equal(fs.readFileSync(file, 'utf8'), '# mine\nschemaVersion: 3\nperson:\n  name: A\nrules:\n  optional: [drafts]\n', 'a user choice is never replaced')
   assert.equal(fs.readFileSync(`${file}.bak-v1`, 'utf8').includes('schemaVersion: 1'), true)
   const other = path.join(box.dir, 'other.yaml')
   fs.writeFileSync(other, 'schemaVersion: 1\nperson:\n  name: A\nrules:\n  future: true\n')
   assert.equal(migrateConfigFile(other).migrated, true)
   const text = fs.readFileSync(other, 'utf8')
-  assert.ok(text.includes('future: true') && text.includes('optional:') && /schemaVersion: 2/.test(text))
+  assert.ok(text.includes('future: true') && text.includes('optional:') && /schemaVersion: 3/.test(text))
   const empty = path.join(box.dir, 'empty.yaml')
   fs.writeFileSync(empty, 'schemaVersion: 1\nrules:\n  optional: []\n')
   assert.equal(migrateConfigFile(empty).migrated, true)
@@ -205,4 +206,37 @@ test('panel: every request goes through the helper that drops undefined values (
   assert.deepEqual(JSON.parse(JSON.stringify(sent)), [['board.get', {}], ['config.save', { patch: { b: { d: 1 }, e: [1, null] } }], ['setup.status']])
   const direct = [...html.matchAll(/orca\.plugin\.request\(/g)]
   assert.equal(direct.length, 2, 'only the helper itself calls orca.plugin.request')
+})
+
+// v1.0.x / v1.1.x configs without automations.jobs relied on six implicit jobs; 1.2.0 ships none.
+for (const tag of ['v1.0.1', 'v1.1.0']) {
+  test(`migration v3 (${tag} config): automations on without jobs keeps the former six jobs, off writes none, and a second read changes nothing`, () => {
+    const original = fs.readFileSync(path.join(FIXTURES, tag, 'config', 'config.yaml'), 'utf8')
+    const stripJobs = (text) => text.replace(/^  jobs:\n(    .*\n|      .*\n)+/m, '')
+    const base = stripJobs(original)
+    assert.doesNotMatch(base, /^  jobs:/m, 'the fixture is reduced to a config with no jobs key')
+    const box = sandbox({ writeConfig: false })
+    for (const [label, enabled, expected] of [['on', true, JOBS_AT_V3.map((j) => j.playbook)], ['off', false, []]]) {
+      const file = path.join(box.dir, `${label}.yaml`)
+      const input = base.replace(/^  enabled: .*$/m, `  enabled: ${enabled}`)
+      fs.writeFileSync(file, input)
+      assert.equal(migrateConfigFile(file).migrated, true)
+      const config = parseYaml(fs.readFileSync(file, 'utf8'))
+      assert.deepEqual((config.automations.jobs ?? []).map((j) => j.playbook), expected)
+      assert.equal(config.automations.timezone, 'Asia/Tokyo', 'other automations keys stay')
+      const stored = Number(/^schemaVersion:\s*(\d+)/m.exec(base)?.[1] ?? 0)
+      assert.equal(fs.readFileSync(`${file}.bak-v${stored}`, 'utf8'), input, 'original backed up byte for byte')
+      const after = fs.readFileSync(file, 'utf8')
+      assert.equal(migrateConfigFile(file).migrated, false, 'idempotent')
+      assert.equal(fs.readFileSync(file, 'utf8'), after)
+    }
+  })
+}
+
+test('migration v3: jobs a user already listed are never replaced, even with an empty list', () => {
+  const box = sandbox({ writeConfig: false })
+  const file = path.join(box.dir, 'c.yaml')
+  fs.writeFileSync(file, 'schemaVersion: 2\nautomations:\n  enabled: true\n  jobs: []\n')
+  assert.equal(migrateConfigFile(file).migrated, true)
+  assert.deepEqual(parseYaml(fs.readFileSync(file, 'utf8')).automations.jobs, [])
 })

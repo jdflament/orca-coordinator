@@ -308,6 +308,36 @@ test('automations install: a job turned off (enabled: false) removes its registe
   assert.deepEqual(box.calls('orca').filter((a) => a[0] === 'automations' && a[1] !== 'list'), [['automations', 'remove', 'a1', '--json']])
 })
 
+test('init never registers Orca automations on its own, even when an older config has enabled: true and jobs', () => {
+  const box = sandbox({ config: { automations: { enabled: true, jobs: [job('cleanup', '0 18 * * *')] } } })
+  box.fake('orca', [anyOk({ automations: [], plugins: [] })])
+  const out = box.run(CLI, initArgs)
+  assert.equal(out.status, 0, out.err)
+  assert.deepEqual(box.calls('orca').filter((a) => a[0] === 'automations' && ['create', 'edit', 'remove'].includes(a[1])), [])
+  assert.equal(readConfig(box.configPath).automations.jobs.length, 1, 'the user\'s own jobs stay in the config untouched')
+})
+
+test('a fresh config ships no jobs, and `automations list` offers playbooks instead of scheduling any', () => {
+  const box = sandbox({ writeConfig: false })
+  box.fake('orca', [anyOk({ automations: [], plugins: [] })])
+  assert.equal(box.run(CLI, initArgs).status, 0)
+  assert.deepEqual(readConfig(box.configPath).automations.jobs, [])
+  const out = box.run(CLI, ['automations', 'list'])
+  assert.match(out.out, /No automations configured/)
+  assert.match(out.out, /pr-review/)
+  assert.deepEqual(box.calls('orca').filter((a) => a[0] === 'automations' && a[1] !== 'list'), [])
+})
+
+test('automations install with no jobs in the config removes nothing already registered in Orca', () => {
+  const box = sandbox({ config: { automations: { jobs: [] } } })
+  box.fake('orca', [
+    { match: ['automations', 'list'], stdout: ok({ automations: [{ id: 'a1', name: 'Job · cleanup', trigger: '0 18 * * *', prompt: '[trigger] cleanup' }] }) },
+    anyOk()
+  ])
+  assert.equal(box.run(CLI, ['automations', 'install']).status, 0)
+  assert.deepEqual(box.calls('orca').filter((a) => a[0] === 'automations' && a[1] !== 'list'), [])
+})
+
 // ---- plugin ----
 
 test('plugin load: a failed install leaves no "installed by this package" marker (bug 14)', () => {

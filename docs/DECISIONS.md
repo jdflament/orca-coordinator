@@ -23,7 +23,7 @@ Decisions:
 - **Shared vs local layout.** Shared: `rules/`, `plugin/`, `bin/`, `prechecks/`, `adapters/`, `playbooks/`, `schema/`, `templates/`, `skill/`. Local, never committed: `config.yaml`, `rules.local.md`, `playbooks.local/`, and the runtime state (state, board, reports, lessons, metrics).
 - **Install assumes no folders.** Config at `~/.config/orca-coordinator/config.yaml` (XDG) or `$ORCA_COORDINATOR_CONFIG`; runtime state at `~/.local/state/orca-coordinator/`; optional per-project `.orca-coordinator.yaml`.
 - **`init` asks** for the few values it cannot guess: your name, writing language and style, UI-term language, flags kind, agent per role, which Orca workspace hosts the coordinator (listed from Orca), repos (from `orca repo list`). Flags answer the same questions non-interactively.
-- **Automations are opt-in**, off by default (`automations.enabled`).
+- **Automations are opt-in**: no default jobs, setup never creates one; only `automations install` / `init --automations` registers the jobs the user listed.
 - **Adapters** expose one interface per tool kind (`get|list|comment|create|url`, `search|draft|post`, `get|list|url|toggle`) so playbooks and rules never name a vendor CLI. Writes refuse without `--yes`.
 - **Not in the package:** company or product names, chat ids, flag URLs and credential names, repo names, ticket prefixes, team labels, review prefixes, personal rules, model choices, home paths. They live in `config.yaml` and `rules.local.md`.
 

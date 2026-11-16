@@ -38,15 +38,6 @@ export function defaultOrcaBin() {
   return 'orca'
 }
 
-const DEFAULT_AUTOMATIONS = [
-  { playbook: 'pr-comments', schedule: '0 9-19 * * 1-5', precheck: 'pr-comments', name: 'Review comments on my PRs: propose replies and fixes' },
-  { playbook: 'pr-review', schedule: '15 9,12,15,18 * * 1-5', precheck: 'pr-review', name: 'Review requests: prepare a review' },
-  { playbook: 'ticket-triage', schedule: '30 9 * * 1-5', precheck: 'ticket-triage', name: 'New work items: triage and plan' },
-  { playbook: 'cleanup', schedule: '0 18 * * *', precheck: 'none', name: 'Cleanup: close idle sessions, remove merged worktrees' },
-  { playbook: 'eval-weekly', schedule: '0 9 * * 1', precheck: 'eval-weekly', name: 'Coordinator: weekly self-evaluation' },
-  { playbook: 'playbook-regression', schedule: '0 10 * * 1-5', precheck: 'playbook-regression', name: 'Coordinator: playbook regression check' }
-]
-
 export function defaults() {
   return {
     schemaVersion: CONFIG_VERSION,
@@ -81,7 +72,7 @@ export function defaults() {
     sensitive: ['commit', 'push', 'pr-open', 'pr-merge', 'pr-comment', 'ticket-write', 'chat-post', 'db', 'deploy', 'prod', 'delete-branch', 'settings-allow-deny'],
     queue: { max: 3, staleHours: 24 },
     budget: { stateBytes: 2500, reportHead: 2500, workerRetries: 1, maxWorkersPerTrigger: 3 },
-    automations: { enabled: false, timezone: 'UTC', graceMinutes: 720, jobs: DEFAULT_AUTOMATIONS.map((j) => ({ ...j })) },
+    automations: { enabled: false, timezone: 'UTC', graceMinutes: 720, jobs: [] },
     board: { oncallLabel: '', repoColors: {} }
   }
 }
