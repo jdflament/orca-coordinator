@@ -43,7 +43,6 @@ const WS_STATES = enumOf(SCHEMA.properties.workstreams.items.properties.status)
 const AGENT_STATES = enumOf(SCHEMA.properties.agents.items.properties.state)
 const REPO_STATES = enumOf(SCHEMA.properties.repos.items.properties.status)
 const REPO_KINDS = enumOf(SCHEMA.properties.repos.items.properties.kind)
-const INSTRUCTION_STATES = enumOf(SCHEMA.properties.instructions.items.properties.status)
 
 const SETTLES_WHEN = enumOf(SCHEMA.properties.decisions.items.properties.settlesWhen)
 const GH_TIMEOUT_MS = 6000
@@ -200,13 +199,7 @@ function parseOptions(spec, recommend) {
 
 function render(board) {
   const lines = []
-  lines.push('# Coordinator board', '', `> Updated ${board.updatedAt}`, '', `**Focus:** ${board.focus || '—'}`, '')
-
-  if (board.instructions.length) {
-    lines.push('## Instructions', '')
-    for (const i of board.instructions) lines.push(`- ${i.status === 'done' ? '✅' : '▶'} ${i.text}`)
-    lines.push('')
-  }
+  lines.push('# Coordinator board', '', `> Updated ${board.updatedAt}`, '')
 
   lines.push('## Decisions (needs you)', '')
   if (board.decisions.length) {
@@ -368,12 +361,9 @@ const commands = {
     } else console.log(`${BOARD_FILE}: valid`)
   },
 
-  focus(text) {
-    const board = load()
-    board.focus = text || ''
-    log(board, `focus set: ${board.focus}`)
-    save(board)
-    console.log(board.focus)
+  // Retired in 1.2.0, kept so older rules and scripts do not fail: accepted, nothing stored or shown.
+  focus() {
+    console.log('focus is no longer shown; ignored')
   },
 
   'ws:add'(id) {
@@ -564,30 +554,13 @@ const commands = {
     for (const line of moved.lines) console.log(`${dry ? 'would archive' : 'archived'} ${line}`)
   },
 
-  'instruction:add'(text) {
-    if (!text) throw new Error('usage: instruction:add <text>')
-    const board = load()
-    const instruction = { id: `i${nextId(board, 'instruction')}`, text, status: 'active', createdAt: now() }
-    board.instructions.push(instruction)
-    log(board, `instruction added: ${text}`)
-    save(board)
-    console.log(instruction.id)
+  // Retired in 1.2.0 (see focus): accepted and ignored.
+  'instruction:add'() {
+    console.log('instructions are no longer shown; ignored')
   },
 
-  'instruction:set'(id) {
-    if (!id) throw new Error('usage: instruction:set <id> [--status active|done] [--text ..]')
-    const board = load()
-    const instruction = findById(board.instructions, id)
-    const status = option('status')
-    if (status) {
-      assertState(status, INSTRUCTION_STATES, 'status')
-      instruction.status = status
-      if (status === 'done') instruction.doneAt = now()
-    }
-    copyOptions(instruction, ['text'])
-    log(board, `instruction ${id} → ${instruction.status}`)
-    save(board)
-    console.log(`${instruction.id} ${instruction.status}`)
+  'instruction:set'() {
+    console.log('instructions are no longer shown; ignored')
   },
 
   ask(title) {
@@ -788,7 +761,7 @@ commands:
   path                                print the board file path
   init [--force]                      create an empty board
   validate                            check the file against schema/board.schema.json
-  focus <text>                        set the current focus line
+  focus <text>                        (retired: accepted, ignored)
   ws:add <id> [--title ..] [--url ..] [--status ${WS_STATES.join('|')}] [--progress N] [--notes ..] [--oncall]
   ws:set <id> [--status ..] [--progress N|""] [--notes ..] [--title ..] [--url ..] [--oncall|--no-oncall]
   ws:rm <id>
@@ -802,8 +775,8 @@ commands:
   agent:rm <name>                     remove an agent from the board (never the coordinator)
   clean                               prune idle/stopped agents and answered decisions
   archive [--dry-run] [--older-than H] move finished items to archive/done-YYYY-MM.md (reconcile does this after board.retentionHours)
-  instruction:add <text>              record a standing instruction from the human
-  instruction:set <id> [--status ${INSTRUCTION_STATES.join('|')}] [--text ..]
+  instruction:add <text>              (retired: accepted, ignored)
+  instruction:set <id>                (retired: accepted, ignored)
   ask <title> [--repo ..] [--url ..] [--action <verb>] [--context ..] [--options "id:Label*|id:Label"] [--recommend <id>] [--settles-when ${SETTLES_WHEN.join('|')}] [--oncall]
   reconcile                           settle decisions whose --settles-when is met (gh, no model)
   answer <decisionId> <optionId|label> [--note ..]

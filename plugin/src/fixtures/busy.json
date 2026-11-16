@@ -1,11 +1,7 @@
 {
   "version": 2,
-  "focus": "DEMO-100 demo feature: merge api #42, then web #310",
   "updatedAt": "2026-01-05T09:00:00.000Z",
-  "seq": { "decision": 3, "instruction": 1 },
-  "instructions": [
-    { "id": "i1", "text": "One question per message, with a recommendation", "status": "active" }
-  ],
+  "seq": { "decision": 3 },
   "decisions": [
     {
       "id": 1,

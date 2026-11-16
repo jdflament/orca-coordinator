@@ -101,7 +101,6 @@ test('board.get merges the board with live workers, liveness and panel.json', as
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
     const view = await getLive(worker)
-    assert.equal(view.focus, 'DEMO-100 demo feature: merge api #42, then web #310')
     assert.equal(view.decisions?.length, 3)
     assert.equal(view.coordinatorLive, true)
     assert.deepEqual(view.repoColors, { api: '#123456' })
@@ -1370,7 +1369,6 @@ for (const tag of ['v1.0.0', 'v1.0.1']) {
         const worker = await mount(home)
         const board = JSON.parse(readFileSync(join(state, 'board.json'), 'utf8'))
         const view = await getLive(worker)
-        assert.equal(view.focus, board.focus)
         assert.deepEqual(view.tasks?.map((t) => t.id), board.tasks.map((t: { id: string }) => t.id))
         assert.deepEqual(view.decisions?.map((d) => d.id), board.decisions.map((d: { id: number }) => d.id))
         assert.equal((await worker.request('setup.status')).configured, true)
@@ -1419,7 +1417,6 @@ test('board.get: a board.json with the wrong types, or that is not an object, st
     const view = (await getLive(worker)) as unknown as Record<string, unknown> & { tasks?: { id: string }[] }
     assert.deepEqual(view.tasks, [{ id: 'A-1' }])
     assert.equal(view.decisions, undefined)
-    assert.equal(view.focus, undefined)
     assert.deepEqual(view.futureField, { a: 1 })
     for (const junk of ['[]', 'null', '"text"', '{broken']) {
       writeFileSync(join(dir, 'board.json'), junk)

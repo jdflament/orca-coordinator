@@ -9,13 +9,47 @@
 // reads on: it never stops the panel or the CLI.
 
 import fs from 'node:fs'
+import path from 'node:path'
 import { parseYaml, toYaml } from './yaml.mjs'
 
 export const CONFIG_VERSION = 4
-export const BOARD_VERSION = 2
+export const BOARD_VERSION = 3
 
 /** Steps of a version: { to, apply }. apply gets the data (config: the file text) and returns the migrated data. */
-export const BOARD_STEPS = []
+export const BOARD_STEPS = [
+  {
+    // 1.2.0 shows no focus line, no Instructions and no activity log. A board written by 1.0.x/1.1.x
+    // still holds their text: reset the fields to empty (keys stay, the reader expects them). The text is
+    // archived by migrateBoardFile (retiredBoardText) before the rewrite. seq.instruction is a counter and stays.
+    to: 3,
+    apply(board) {
+      return { ...board, focus: '', instructions: [], log: [] }
+    }
+  }
+]
+
+/** Markdown lines for what the v3 step retires from a board: nothing when there is nothing. Pure. */
+export function retiredBoardText(board) {
+  const lines = []
+  if (typeof board?.focus === 'string' && board.focus.trim()) lines.push(`- focus: ${board.focus.trim()}`)
+  for (const i of Array.isArray(board?.instructions) ? board.instructions : []) {
+    if (i && typeof i === 'object') lines.push(`- instruction ${i.id ?? ''} (${i.status || 'active'}): ${i.text ?? ''}${i.createdAt ? ` — added ${i.createdAt}` : ''}${i.doneAt ? ` — done ${i.doneAt}` : ''}`)
+  }
+  for (const e of Array.isArray(board?.log) ? board.log : []) {
+    if (e && typeof e === 'object') lines.push(`- log ${e.at ?? ''} — ${e.text ?? ''}`)
+  }
+  return lines
+}
+
+/** Appends the retired text to <state>/archive/done-YYYY-MM.md (the file `board archive` appends to). */
+function archiveRetired(file, lines) {
+  if (!lines.length) return
+  const day = new Date().toISOString().slice(0, 10)
+  const archive = path.join(path.dirname(file), 'archive', `done-${day.slice(0, 7)}.md`)
+  fs.mkdirSync(path.dirname(archive), { recursive: true })
+  if (!fs.existsSync(archive)) fs.writeFileSync(archive, `# Done ${day.slice(0, 7)}\n`)
+  fs.appendFileSync(archive, `\n## ${day} (board, no longer shown after the update)\n${lines.join('\n')}\n`)
+}
 
 /** config.yaml is migrated as TEXT, so the user's comments and layout survive; a step that needs structure parses and re-serializes itself. */
 export const CONFIG_STEPS = [
@@ -138,6 +172,9 @@ export function migrateBoardFile(file, steps = BOARD_STEPS, current = BOARD_VERS
     if (!board || typeof board !== 'object' || Array.isArray(board)) return { migrated: false }
     const result = migrateBoardData(board, steps, current)
     if (!result.migrated) return { migrated: false, from: result.from }
+    // Archive first: if it fails nothing is rewritten, so nothing is lost. Only boards older than the
+    // step carry retired content; a rerun finds the fields empty and archives nothing.
+    if (result.from < 3 && current >= 3) archiveRetired(file, retiredBoardText(board))
     const backup = backupOnce(file, result.from)
     writeAtomic(file, JSON.stringify(result.board, null, 2) + '\n')
     return { migrated: true, from: result.from, to: current, backup }
