@@ -203,7 +203,7 @@ test('board.send types a click into the live coordinator terminal, then Enter, a
   await withFakeOrca(true, async (log) => {
     const dir = stateFolder()
     const worker = await mountWorker(main, { host: mockHost({ settings: { coordinatorDir: dir } }) })
-    assert.deepEqual(await worker.request('board.send', { text: 'done 1' }), { sent: true, queued: false })
+    assert.deepEqual(await worker.request('board.send', { text: 'done 1' }), { sent: true, queued: false, focused: true })
     const calls = readFileSync(log, 'utf8')
     assert.ok(calls.includes('terminal send --terminal term_coord --text done 1'), 'the click reaches the coordinator terminal')
     assert.ok(calls.includes('--enter'), 'followed by Enter')
