@@ -206,6 +206,25 @@ function mergeBoardAgents(workers: LiveWorker[], agents: NonNullable<Board['agen
   return { workers: merged, agents: agents.filter((_, i) => !used.has(i)) }
 }
 
+/** The board.json version this build reads (bin/lib/migrate.mjs BOARD_VERSION; a test keeps them equal). */
+export const BOARD_VERSION = 2
+
+/** What is wrong with a stored file that exists, in words the user can act on; '' when it is fine or absent. */
+async function describeStored(file: string, newerThan?: number): Promise<string> {
+  const text = await readFile(file, 'utf8').catch(() => null)
+  if (text === null) return ''
+  const name = path.basename(file)
+  try {
+    const data = JSON.parse(text) as unknown
+    if (!data || typeof data !== 'object' || Array.isArray(data)) return `${name} is not a JSON object: showing it empty. Your file is untouched; fix it, or restore ${name}.bak-v<N> if one exists.`
+    const version = (data as { version?: unknown }).version
+    if (newerThan !== undefined && typeof version === 'number' && version > newerThan) return `${name} was written by a newer orca-coordinator (v${version}): update the plugin. It is shown as far as this version understands it, and not rewritten.`
+    return ''
+  } catch {
+    return `${name} cannot be parsed: showing it empty. Your file is untouched; fix it, or restore ${name}.bak-v<N> if one exists.`
+  }
+}
+
 async function readJson<T>(file: string, fallback: T): Promise<T> {
   return readFile(file, 'utf8')
     .then((text) => JSON.parse(text) as T)
@@ -273,6 +292,7 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
   const board = sanitizeBoard(await readJson<unknown>(path.join(dir, 'board.json'), null))
   const read = await readJson<PanelJson>(path.join(dir, 'panel.json'), {})
   const panel: PanelJson = read && typeof read === 'object' ? read : {}
+  const dataProblems = (await Promise.all([describeStored(path.join(dir, 'board.json'), BOARD_VERSION), describeStored(path.join(dir, 'panel.json'))])).filter(Boolean)
   const handle = await getCoordinatorHandle().catch(() => '')
   const [list, coordinatorLive] = await Promise.all([listWorkers().catch(() => null), handle ? getIsCoordinatorLive(handle).catch(() => false) : Promise.resolve(false)])
   const config = await getConfig().catch(() => null)
@@ -290,8 +310,9 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
     coordinatorLive,
     canStart: config !== null && !coordinatorLive,
     staleLinks: config ? await staleSkillLinks() : [],
-    repoColors: panel.repoColors ?? {},
-    oncallLabel: panel.oncallLabel ?? ''
+    repoColors: panel.repoColors && typeof panel.repoColors === 'object' && !Array.isArray(panel.repoColors) ? panel.repoColors : {},
+    oncallLabel: typeof panel.oncallLabel === 'string' ? panel.oncallLabel : '',
+    dataProblems
   }
   markNew(view, seen)
   return view

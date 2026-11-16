@@ -204,6 +204,7 @@
       <div id="plan" class="plan" hidden></div>
       <div id="result" class="result"></div>
       <div id="links" class="notice" hidden></div>
+      <div id="problems" class="notice" hidden></div>
       <section id="setup" class="setup" hidden></section>
       <section id="settings" class="settings" hidden></section>
       <div id="board">
@@ -697,6 +698,7 @@
           byId('dot').title = board.coordinatorLive ? 'coordinator live' : 'coordinator offline'
         })
         guard(() => renderStaleLinks(board.staleLinks))
+        guard(() => renderDataProblems(board.dataProblems))
         guard(() => {
           byId('updated').textContent = 'updated ' + getAgo(board.updatedAt)
           byId('focus').textContent = text(board.focus)
@@ -745,6 +747,14 @@
           void refresh()
         })
         node.replaceChildren(el('span', '', 'Skill link out of date: ' + stale.join(', ')), update)
+      }
+
+      // Stored data this version cannot read: said plainly, with what to do; the rest of the panel keeps working.
+      function renderDataProblems(problems) {
+        const shown = list(problems)
+        const node = byId('problems')
+        node.hidden = shown.length === 0
+        node.replaceChildren(...shown.map((line) => el('div', '', text(line))))
       }
 
       function showResult(message, actions, isError) {
