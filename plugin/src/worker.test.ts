@@ -395,7 +395,7 @@ function writeConfig(home: string, extra = '', repos?: { name: string; path: str
   mkdirSync(join(home, '.config/orca-coordinator'), { recursive: true })
   writeFileSync(
     file,
-    `# my coordinator config\n# hand-edited\nschemaVersion: 2\nperson:\n  name: Alex\n  github: alex-dev\npaths:\n  package: ${pkg}\n  state: ${join(home, 'state')}\n  workspace: ${join(home, 'work')}\nrepos:\n${repos.map((r) => `  - name: ${r.name}\n    path: ${r.path}\n    base: develop\n`).join('')}myTeamNotes:\n  keep: true\n${extra}`
+    `# my coordinator config\n# hand-edited\nschemaVersion: 3\nperson:\n  name: Alex\n  github: alex-dev\npaths:\n  package: ${pkg}\n  state: ${join(home, 'state')}\n  workspace: ${join(home, 'work')}\nrepos:\n${repos.map((r) => `  - name: ${r.name}\n    path: ${r.path}\n    base: develop\n`).join('')}myTeamNotes:\n  keep: true\n${extra}`
   )
   return file
 }
@@ -1282,7 +1282,8 @@ for (const tag of ['v1.0.0', 'v1.0.1']) {
         // Save after the migration: unknown keys and the migrated version stay; one backup of the original.
         assert.ok((await worker.request('config.save', { patch: { person: { name: 'Sam' } } })).saved)
         const saved = readFileSync(config, 'utf8')
-        assert.match(saved, /^schemaVersion: 2$/m)
+        assert.match(saved, /^schemaVersion: 3$/m)
+        assert.match(saved, /retentionHours: 24/)
         assert.match(saved, /optional: \[planning-tracker, five-line-plan, drafts\]/)
         assert.match(saved, /name: Sam/)
         assert.deepEqual(readdirSync(join(config, '..')).filter((f) => f.includes('.bak')), ['config.yaml.bak-v0'])
@@ -1301,7 +1302,7 @@ for (const tag of ['v1.0.0', 'v1.0.1']) {
       const original = readFileSync(config, 'utf8')
       await updateIfInstalledHere()
       const migrated = readFileSync(config, 'utf8')
-      assert.equal(migrated, original.replace(/^(#.*\n)+/, (header) => `${header}schemaVersion: 2\n`) + 'rules:\n  optional: [planning-tracker, five-line-plan, drafts]\n', 'only the version line and the explicit rules were added')
+      assert.equal(migrated, original.replace(/^(#.*\n)+/, (header) => `${header}schemaVersion: 3\n`).replace(/^board:\n/m, 'board:\n  retentionHours: 24\n') + 'rules:\n  optional: [planning-tracker, five-line-plan, drafts]\n', 'only the version line, the explicit rules and the retention default were added')
       assert.equal(readFileSync(`${config}.bak-v0`, 'utf8'), original)
       await updateIfInstalledHere()
       assert.equal(readFileSync(config, 'utf8'), migrated, 'idempotent')

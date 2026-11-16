@@ -242,3 +242,72 @@ test('board ask --settles-when: an unknown condition or a url that is not a GitH
   assert.equal(b.run('ask', 'Y', '--url', PR(1), '--settles-when', 'pr-merged').status, 0)
   assert.equal(b.read().decisions[0].settlesWhen, 'pr-merged')
 })
+
+// ---- retention: finished items leave the board on their own, open ones never ----
+
+const HOUR = 3600000
+const ago = (hours) => new Date(Date.now() - hours * HOUR).toISOString()
+
+function retentionBox(board, retentionHours) {
+  const box = sandbox({ config: retentionHours === undefined ? {} : { board: { retentionHours } } })
+  const file = path.join(box.state, 'board.json')
+  box.run('bin/board.mjs', ['init'])
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), ...board }))
+  const run = (...args) => box.run('bin/board.mjs', args)
+  const archiveDir = path.join(box.state, 'archive')
+  const archive = () => (fs.existsSync(archiveDir) ? fs.readdirSync(archiveDir).map((f) => fs.readFileSync(path.join(archiveDir, f), 'utf8')).join('\n') : '')
+  return { run, archive, read: () => JSON.parse(fs.readFileSync(file, 'utf8')) }
+}
+
+const opt = { id: 'done', label: 'Do' }
+const decision = (id, status, title, at) => ({ id, title, repo: '', url: '', action: 'Decide', context: '', options: [opt], status, createdAt: ago(900), ...(status === 'answered' ? { answer: 'Do', answeredAt: at } : {}) })
+const finishedBoard = () => ({
+  tasks: [
+    { id: 'OLD-1', ws: '', repo: 'api', status: 'merged', url: '', detail: '', mergedAt: ago(30) },
+    { id: 'NEW-2', ws: '', repo: 'api', status: 'merged', url: '', detail: '', mergedAt: ago(1) },
+    { id: 'OPEN-3', ws: '', repo: 'api', status: 'pr', url: '', detail: '' }
+  ],
+  decisions: [decision(1, 'answered', 'old answered', ago(30)), decision(2, 'answered', 'fresh answered', ago(1)), decision(3, 'pending', 'ancient but open')],
+  log: [{ at: ago(30), text: 'old entry' }, { at: ago(1), text: 'fresh entry' }]
+})
+
+test('board retention (reconcile): old finished items move to the archive, fresh and open ones stay, a second run changes nothing', () => {
+  const { run, read, archive } = retentionBox(finishedBoard())
+  assert.equal(run('reconcile').status, 0)
+  const board = read()
+  assert.deepEqual(board.tasks.map((t) => t.id), ['NEW-2', 'OPEN-3'])
+  assert.deepEqual(board.decisions.map((d) => d.id), [2, 3], 'an open decision never moves, however old')
+  assert.ok(!board.log.some((e) => e.text === 'old entry') && board.log.some((e) => e.text === 'fresh entry'))
+  assert.match(archive(), /task OLD-1[^\n]*merged/)
+  assert.match(archive(), /decision 1: old answered/)
+  assert.match(archive(), /log [^\n]*old entry/)
+  const [boardText, archiveText] = [JSON.stringify(board), archive()]
+  run('reconcile')
+  assert.equal(JSON.stringify(read()), boardText, 'idempotent')
+  assert.equal(archive(), archiveText)
+})
+
+test('board retention: appends to the month file instead of overwriting, and a finished item with no recorded time is stamped, not dropped', () => {
+  const { run, read, archive } = retentionBox({ ...finishedBoard(), decisions: [decision(1, 'answered', 'no time recorded', undefined)] })
+  run('reconcile')
+  assert.equal(read().decisions.length, 1, 'kept: its age is unknown')
+  assert.ok(read().decisions[0].answeredAt, 'stamped now, so it ages out later')
+  run('archive')
+  run('task:add', 'LATE-4', '--status', 'merged')
+  run('task:set', 'LATE-4', '--status', 'merged')
+  run('archive')
+  const text = archive()
+  assert.match(text, /task OLD-1/)
+  assert.match(text, /task LATE-4/, 'the second archive appended; the first entries are still there')
+  assert.equal((text.match(/^# Done /gm) || []).length, 1, 'one heading: appended, never rewritten')
+})
+
+test('board retention: board.retentionHours 0 keeps everything until `archive`, and `archive --older-than` leaves fresh items', () => {
+  const { run, read } = retentionBox(finishedBoard(), 0)
+  run('reconcile')
+  assert.equal(read().tasks.length, 3, '0 turns the automatic move off')
+  run('archive', '--older-than', '12')
+  assert.deepEqual(read().tasks.map((t) => t.id), ['NEW-2', 'OPEN-3'])
+  run('archive')
+  assert.deepEqual(read().tasks.map((t) => t.id), ['OPEN-3'], 'plain archive keeps its meaning: every finished item')
+})

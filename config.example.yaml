@@ -106,4 +106,5 @@ automations:
 
 board:
   oncallLabel: ""                           # text of the priority badge on items flagged oncall; empty shows "Priority"
+  retentionHours: 24                         # finished items (merged tasks, answered decisions, old log) move to archive/ after this many hours; 0 = keep until Clean up
   repoColors: {}                             # optional {repo: "#hex"}; unset repos get a stable hash colour

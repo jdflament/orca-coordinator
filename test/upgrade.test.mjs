@@ -7,7 +7,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import test from 'node:test'
 import vm from 'node:vm'
-import { BOARD_VERSION, CONFIG_VERSION, backupOnce, migrateBoardFile, migrateConfigFile, runSteps } from '../bin/lib/migrate.mjs'
+import { BOARD_VERSION, CONFIG_STEPS, CONFIG_VERSION, backupOnce, migrateBoardFile, migrateConfigFile, runSteps } from '../bin/lib/migrate.mjs'
 import { availableOptionalRules, enabledOptionalRules } from '../bin/lib/config.mjs'
 import { JOBS_AT_V3, OPTIONAL_RULES_AT_V2 } from '../bin/lib/migrate.mjs'
 import { parseYaml } from '../bin/lib/yaml.mjs'
@@ -71,6 +71,7 @@ for (const tag of TAGS) {
     assert.equal(config.myTeamNotes?.keep, true, 'unknown keys survive the read')
     const stored = Number(/^schemaVersion:\s*(\d+)/m.exec(original)?.[1] ?? 0)
     const migrates = stored < CONFIG_VERSION
+    assert.equal(config.board.retentionHours, /^\s+retentionHours:\s*(\d+)/m.exec(original)?.[1] ? Number(/^\s+retentionHours:\s*(\d+)/m.exec(original)[1]) : 24, 'retention defaults to 24h, a stored value is kept')
     if (stored < 2) {
       // rules.optional was implicit (missing = all on); the migration writes it out, so the install keeps every optional rule it had.
       assert.deepEqual(config.rules.optional, OPTIONAL_RULES_AT_V2)
@@ -126,17 +127,17 @@ test('migration v2: an existing rules.optional is kept, a rules block without it
   const box = sandbox({ writeConfig: false })
   const file = path.join(box.dir, 'config.yaml')
   fs.writeFileSync(file, '# mine\nschemaVersion: 1\nperson:\n  name: A\nrules:\n  optional: [drafts]\n')
-  assert.equal(migrateConfigFile(file).migrated, true)
-  assert.equal(fs.readFileSync(file, 'utf8'), '# mine\nschemaVersion: 3\nperson:\n  name: A\nrules:\n  optional: [drafts]\n', 'a user choice is never replaced')
+  assert.equal(migrateConfigFile(file, CONFIG_STEPS, 2).migrated, true)
+  assert.equal(fs.readFileSync(file, 'utf8'), '# mine\nschemaVersion: 2\nperson:\n  name: A\nrules:\n  optional: [drafts]\n', 'a user choice is never replaced')
   assert.equal(fs.readFileSync(`${file}.bak-v1`, 'utf8').includes('schemaVersion: 1'), true)
   const other = path.join(box.dir, 'other.yaml')
   fs.writeFileSync(other, 'schemaVersion: 1\nperson:\n  name: A\nrules:\n  future: true\n')
-  assert.equal(migrateConfigFile(other).migrated, true)
+  assert.equal(migrateConfigFile(other, CONFIG_STEPS, 2).migrated, true)
   const text = fs.readFileSync(other, 'utf8')
-  assert.ok(text.includes('future: true') && text.includes('optional:') && /schemaVersion: 3/.test(text))
+  assert.ok(text.includes('future: true') && text.includes('optional:') && /schemaVersion: 2/.test(text))
   const empty = path.join(box.dir, 'empty.yaml')
   fs.writeFileSync(empty, 'schemaVersion: 1\nrules:\n  optional: []\n')
-  assert.equal(migrateConfigFile(empty).migrated, true)
+  assert.equal(migrateConfigFile(empty, CONFIG_STEPS, 2).migrated, true)
   assert.match(fs.readFileSync(empty, 'utf8'), /optional: \[\]/, '[] (none) stays none')
 })
 
@@ -239,4 +240,18 @@ test('migration v3: jobs a user already listed are never replaced, even with an 
   fs.writeFileSync(file, 'schemaVersion: 2\nautomations:\n  enabled: true\n  jobs: []\n')
   assert.equal(migrateConfigFile(file).migrated, true)
   assert.deepEqual(parseYaml(fs.readFileSync(file, 'utf8')).automations.jobs, [])
+})
+
+test('migration v4: board.retentionHours is added to a board block, a new block or none, and a stored value is never replaced', () => {
+  const box = sandbox({ writeConfig: false })
+  const run = (name, text) => {
+    const file = path.join(box.dir, name)
+    fs.writeFileSync(file, text)
+    assert.equal(migrateConfigFile(file).migrated, true)
+    return fs.readFileSync(file, 'utf8')
+  }
+  assert.equal(run('a.yaml', '# mine\nschemaVersion: 3\nboard:\n  oncallLabel: P1\n'), '# mine\nschemaVersion: 4\nboard:\n  retentionHours: 24\n  oncallLabel: P1\n')
+  assert.equal(run('b.yaml', 'schemaVersion: 3\nperson:\n  name: A\n'), 'schemaVersion: 4\nperson:\n  name: A\nboard:\n  retentionHours: 24\n')
+  assert.equal(run('c.yaml', 'schemaVersion: 3\nboard:\n  retentionHours: 0\n'), 'schemaVersion: 4\nboard:\n  retentionHours: 0\n', '0 (keep) is a user choice')
+  assert.match(run('d.yaml', 'schemaVersion: 3\nboard: {oncallLabel: P1}\n'), /retentionHours: 24/)
 })
