@@ -89,16 +89,16 @@ function fakeTimers() {
 test('a board load that fails or hangs after a good one is silent: the board stays, nothing error-shaped is shown, the next try comes by itself', async () => {
   const timers = fakeTimers()
   let mode = 'ok'
-  const panel = mountPanel({ 'setup.status': () => ({ configured: true }), 'board.get': () => (mode === 'hang' ? new Promise(() => {}) : mode === 'fail' ? Promise.reject(new Error('worker busy')) : { focus: 'ship it', liveReady: true }) }, [], timers)
+  const panel = mountPanel({ 'setup.status': () => ({ configured: true }), 'board.get': () => (mode === 'hang' ? new Promise(() => {}) : mode === 'fail' ? Promise.reject(new Error('worker busy')) : { coordinatorLive: true, liveReady: true }) }, [], timers)
   await settle()
-  assert.equal(panel.byId('focus').textContent, 'ship it')
+  assert.equal(panel.byId('dot').title, 'coordinator live', 'the first board is drawn')
   mode = 'hang'
   timers.fire(15000)
   await settle()
   timers.fire(25000) // the request timeout
   await settle()
   assert.doesNotMatch(String(panel.byId('updated').textContent), /Could not|took longer/, 'no error text in the header')
-  assert.equal(panel.byId('focus').textContent, 'ship it', 'the last good board stays on screen')
+  assert.equal(panel.byId('dot').title, 'coordinator live', 'the last good board stays on screen (a failed load must not redraw it empty)')
   assert.ok(timers.next().includes(5000), 'the next try is already scheduled')
   mode = 'ok'
   timers.fire(5000)
@@ -108,11 +108,11 @@ test('a board load that fails or hangs after a good one is silent: the board sta
 
 test('while the live parts are not ready the panel looks again in seconds; a source failing for minutes is only hinted beside "updated"', async () => {
   const timers = fakeTimers()
-  let view = { focus: 'x', liveReady: false }
+  let view = { liveReady: false }
   const panel = mountPanel({ 'setup.status': () => ({ configured: true }), 'board.get': () => view }, [], timers)
   await settle()
   assert.deepEqual(timers.next(), [2000])
-  view = { focus: 'x', liveReady: true, stale: { workers: 7 } }
+  view = { liveReady: true, stale: { workers: 7 } }
   timers.fire(2000)
   await settle()
   assert.match(String(panel.byId('updated').textContent), /agents last seen 7m ago/)

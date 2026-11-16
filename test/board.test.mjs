@@ -241,6 +241,27 @@ test('board reconcile: a slow gh call does not wipe what the coordinator wrote t
   assert.ok(board.log.some((entry) => entry.text === 'written while gh was slow'), 'the concurrent write survived the settle')
 })
 
+test('board verbs: processes writing at the same moment all keep their entry (no lost update), and a lock left by a crashed process is taken over', async () => {
+  const b = boardIn()
+  b.run('init')
+  const { spawn } = await import('node:child_process')
+  const file = b.file
+  const runs = Array.from({ length: 8 }, (_, i) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [BOARD, 'log', `entry ${i}`], { env: { ...process.env, COORDINATOR_BOARD: file }, stdio: 'ignore' })
+    child.on('close', resolve)
+  }))
+  await Promise.all(runs)
+  const texts = b.read().log.map((entry) => entry.text)
+  for (let i = 0; i < 8; i++) assert.ok(texts.includes(`entry ${i}`), `entry ${i} survived`)
+  // A crashed verb left its lock behind long ago: the next verb takes over instead of waiting for ever.
+  fs.mkdirSync(`${file}.lock`)
+  const old = new Date(Date.now() - 120000)
+  fs.utimesSync(`${file}.lock`, old, old)
+  assert.equal(b.run('log', 'after crash').status, 0)
+  assert.ok(b.read().log.some((entry) => entry.text === 'after crash'))
+  assert.ok(!fs.existsSync(`${file}.lock`), 'the lock is released')
+})
+
 test('board save: a reader never sees a half-written board.json (written aside, renamed in place)', () => {
   const b = boardIn()
   b.run('init')
@@ -302,6 +323,20 @@ test('board retention (reconcile): old finished items move to the archive, fresh
   run('reconcile')
   assert.equal(JSON.stringify(read()), boardText, 'idempotent')
   assert.equal(archive(), archiveText)
+})
+
+test('board retention (reconcile): a slow gh call does not make the archive overwrite what was written to the board meanwhile', () => {
+  const b = { ...finishedBoard() }
+  b.decisions = [...b.decisions, { ...decision(4, 'pending', 'waits for a PR'), url: PR(9), settlesWhen: 'pr-merged' }]
+  const box = sandbox()
+  box.fake('gh', [{ match: ['pr', 'view', PR(9)], stdout: JSON.stringify({ state: 'OPEN', reviews: [] }), exec: [process.execPath, BOARD, 'log', 'written while gh was slow'] }])
+  const file = path.join(box.state, 'board.json')
+  box.run('bin/board.mjs', ['init'])
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), ...b }))
+  assert.equal(box.run('bin/board.mjs', ['reconcile']).status, 0)
+  const board = JSON.parse(fs.readFileSync(file, 'utf8'))
+  assert.deepEqual(board.tasks.map((t) => t.id), ['NEW-2', 'OPEN-3'], 'the old finished task was archived')
+  assert.ok(board.log.some((entry) => entry.text === 'written while gh was slow'), 'the concurrent write survived the archive')
 })
 
 test('board retention: appends to the month file instead of overwriting, and a finished item with no recorded time is stamped, not dropped', () => {
