@@ -308,8 +308,8 @@ declare module 'orca' {
     /** Needs confirmed: true. Copies the package to its stable home and runs init with the answers: links only the chosen agents. */
     'setup.run': { input: SetupOptions; output: { ok: boolean; output: string } }
     /** Starts the coordinator agent in the configured workspace, in a terminal, focused. */
-    /** agent: the kind the user picked from what Orca reports; choices: asked back when Orca reports several and none was picked. */
-    'setup.start': { input: { agent?: string }; output: { started: boolean; output: string; choices?: string[] } }
+    /** agent: optional override; else the agent Orca reports, else config.yaml's. */
+    'setup.start': { input: { agent?: string }; output: { started: boolean; output: string } }
     /** Re-points existing skill links that are stale; creates no new link and edits no settings. */
     'setup.updateLinks': { output: { updated: string[] } }
     /** The user's config.yaml, merged with defaults, plus its problems and the choices. */

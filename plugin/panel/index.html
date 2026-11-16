@@ -1222,11 +1222,7 @@
         node.innerHTML = '<span class="spinner"></span>Starting…'
         try {
           const result = await request('setup.start', agent ? { agent } : {})
-          // Orca reports several agents and none was picked: ask which, from exactly what Orca reported.
-          if (!result?.started && list(result?.choices).length) {
-            showResult('Which agent?', [text(result.output)], false)
-            byId('result').append(...result.choices.map((kind) => button('Start with ' + kind, () => void startCoordinator(kind))))
-          } else if (!result?.started) showResult('Could not start the coordinator', text(result?.output).split('\n').filter(Boolean), true)
+          if (!result?.started) showResult('Could not start the coordinator', text(result?.output).split('\n').filter(Boolean), true)
         } catch (error) {
           showResult('Could not start the coordinator: ' + error.message, [], true)
         } finally {
