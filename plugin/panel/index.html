@@ -352,10 +352,10 @@
       const RETRY_MS = 5000
       const REQUEST_TIMEOUT_MS = 25000
       // Settles with the promise, or rejects when `ms` passed: no request can leave the panel waiting for ever.
-      function withTimeout(promise, ms, what, timers) {
+      function withTimeout(promise, ms, what) {
         let timer
-        const late = new Promise((_, reject) => { timer = timers.setTimeout(() => reject(new Error(what + ' took longer than ' + Math.round(ms / 1000) + 's')), ms) })
-        return Promise.race([promise, late]).finally(() => timers.clearTimeout(timer))
+        const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(what + ' took longer than ' + Math.round(ms / 1000) + 's')), ms) })
+        return Promise.race([promise, late]).finally(() => clearTimeout(timer))
       }
       // A live source failing for minutes is only hinted, beside "updated": no banner, no button.
       function staleHint(stale) {
@@ -1234,7 +1234,7 @@
           if (configured !== true) {
             // The setup form is filled in by hand: the periodic refresh must not wipe it.
             if (setupShown && !byId('setup').hidden) return
-            const status = await withTimeout(request('setup.status'), REQUEST_TIMEOUT_MS, 'Checking the setup', { setTimeout, clearTimeout })
+            const status = await withTimeout(request('setup.status'), REQUEST_TIMEOUT_MS, 'Checking the setup')
             if (seq !== refreshSeq) return
             configured = status?.configured === true
             if (!configured) return renderSetup(status || {})
@@ -1242,7 +1242,7 @@
           }
           step = 'Could not load the board'
           // Host request input is JSON: an `undefined` value (the first load has no `seen`) is refused as "input: Invalid input".
-          const board = await withTimeout(request('board.get', seenNeeds ? { seen: [...seenNeeds] } : {}), REQUEST_TIMEOUT_MS, 'Loading the board', { setTimeout, clearTimeout })
+          const board = await withTimeout(request('board.get', seenNeeds ? { seen: [...seenNeeds] } : {}), REQUEST_TIMEOUT_MS, 'Loading the board')
           if (seq !== refreshSeq) return
           step = 'Could not show the board'
           const view = board && typeof board === 'object' ? board : {}
