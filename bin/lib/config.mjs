@@ -73,7 +73,7 @@ export function defaults() {
     queue: { max: 3, staleHours: 24 },
     budget: { stateBytes: 2500, reportHead: 2500, workerRetries: 1, maxWorkersPerTrigger: 3 },
     automations: { enabled: false, timezone: 'UTC', graceMinutes: 720, jobs: [] },
-    board: { oncallLabel: '', repoColors: {} }
+    board: { oncallLabel: '', repoColors: {}, retentionHours: 24 }
   }
 }
 
@@ -208,6 +208,8 @@ export function validate(config) {
   if (!FLAGS_KINDS.includes(config.adapters.flags.kind)) problems.push(`adapters.flags.kind must be one of ${FLAGS_KINDS.join('|')}`)
   if (typeof config.queue.max !== 'number' || config.queue.max < 1) problems.push('queue.max must be a number ≥ 1')
   if (typeof config.budget.stateBytes !== 'number' || config.budget.stateBytes < 500) problems.push('budget.stateBytes must be a number ≥ 500')
+  const retention = config.board?.retentionHours
+  if (retention !== undefined && (typeof retention !== 'number' || retention < 0)) problems.push('board.retentionHours must be a number ≥ 0 (0 keeps finished items until Clean up)')
   for (const job of config.automations.jobs || []) {
     if (!job.playbook) problems.push('automations.jobs[]: playbook is required')
     if (!job.schedule) problems.push(`automations.jobs[${job.playbook}]: schedule is required`)

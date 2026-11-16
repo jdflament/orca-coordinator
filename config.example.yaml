@@ -3,7 +3,7 @@
 # its root to override keys. No secrets here: credentials stay in the OS keychain
 # (secretRef: keychain:<service>), in an env var (env:NAME) or in a file (file:<path>).
 
-schemaVersion: 3                  # managed by the coordinator: migrations bump it, keep it
+schemaVersion: 4                  # managed by the coordinator: migrations bump it, keep it
 
 person:
   name: <you>                      # how the coordinator addresses you
@@ -106,4 +106,5 @@ automations:
 
 board:
   oncallLabel: ""                           # text of the priority badge on items flagged oncall; empty shows "Priority"
+  retentionHours: 24                         # finished items (merged tasks, answered decisions, old log) move to archive/ after this many hours; 0 = keep until Clean up
   repoColors: {}                             # optional {repo: "#hex"}; unset repos get a stable hash colour

@@ -36,6 +36,7 @@ const INBOX_REJECTED = path.join(path.dirname(BOARD_FILE), 'inbox.rejected.jsonl
 
 const VERSION = BOARD_VERSION
 const LOG_KEPT = 20
+const DEFAULT_RETENTION_HOURS = 24
 const enumOf = (p) => p.enum
 const TASK_STATES = enumOf(SCHEMA.properties.tasks.items.properties.status)
 const WS_STATES = enumOf(SCHEMA.properties.workstreams.items.properties.status)
@@ -221,6 +222,76 @@ function runScript(name, args) {
   })
   if (result.error) throw result.error
   process.exitCode = result.status ?? 1
+}
+
+const finishedAt = (item, key) => {
+  const t = Date.parse(item[key])
+  return Number.isFinite(t) ? t : null
+}
+
+/** Hours finished items stay on the board (config board.retentionHours); 0 keeps them until `archive`. */
+function retentionHours() {
+  try {
+    const hours = Number(loadConfig({ strict: false }).config.board?.retentionHours)
+    return Number.isFinite(hours) && hours >= 0 ? hours : DEFAULT_RETENTION_HOURS
+  } catch {
+    return DEFAULT_RETENTION_HOURS
+  }
+}
+
+/**
+ * The single archive implementation (the `archive` verb, Clean up and the automatic retention in
+ * `reconcile` all end here). Moves finished items whose finish time is before `cutoff` (null = all)
+ * to archive/done-YYYY-MM.md and saves the board. Open items never move; an item finished before
+ * its time was recorded gets stamped now, so it ages out instead of vanishing early. Log entries
+ * older than the cutoff move too (never with a null cutoff). Idempotent: a second run finds nothing.
+ */
+function archiveFinished(board, { cutoff = null, dry = false } = {}) {
+  let stamped = false
+  const due = (item, key) => {
+    if (cutoff === null) return true
+    const at = finishedAt(item, key)
+    if (at === null) {
+      if (!dry) {
+        item[key] = now()
+        stamped = true
+      }
+      return false
+    }
+    return at < cutoff
+  }
+  const tasks = board.tasks.filter((t) => t.status === 'merged' && due(t, 'mergedAt'))
+  const decisions = board.decisions.filter((d) => d.status === 'answered' && due(d, 'answeredAt'))
+  const instructions = board.instructions.filter((i) => i.status === 'done' && due(i, 'doneAt'))
+  const entries = cutoff === null ? [] : board.log.filter((e) => finishedAt(e, 'at') !== null && finishedAt(e, 'at') < cutoff)
+  const lines = [
+    ...tasks.map((t) => `task ${t.id} (merged${t.pr ? ` #${t.pr}` : ''})`),
+    ...decisions.map((d) => `decision ${d.id} (answered: ${d.title})`),
+    ...instructions.map((i) => `instruction ${i.id} (done)`)
+  ]
+  const count = lines.length + entries.length
+  if (dry || !count) {
+    if (stamped) save(board)
+    return { count, lines }
+  }
+  const day = now().slice(0, 10)
+  const file = path.join(STATE_DIR, 'archive', `done-${day.slice(0, 7)}.md`)
+  fs.mkdirSync(path.dirname(file), { recursive: true })
+  const text = [
+    ...tasks.map((t) => `- task ${t.id}${t.repo ? ` · ${t.repo}` : ''}${t.pr ? ` · #${t.pr}` : ''} — merged${t.mergedAt ? ` ${t.mergedAt}` : ''}${t.detail ? ` — ${t.detail}` : ''}`),
+    ...decisions.map((d) => `- decision ${d.id}: ${d.title} — ${d.answer || 'answered'}${d.url ? ` — ${d.url}` : ''}`),
+    ...instructions.map((i) => `- instruction ${i.id}: ${i.text}${i.doneAt ? ` — done ${i.doneAt}` : ''}`),
+    ...entries.map((e) => `- log ${e.at} — ${e.text}`)
+  ]
+  if (!fs.existsSync(file)) fs.writeFileSync(file, `# Done ${day.slice(0, 7)}\n`)
+  fs.appendFileSync(file, `\n## ${day} (board)\n${text.join('\n')}\n`)
+  board.tasks = board.tasks.filter((t) => !tasks.includes(t))
+  board.decisions = board.decisions.filter((d) => !decisions.includes(d))
+  board.instructions = board.instructions.filter((i) => !instructions.includes(i))
+  board.log = board.log.filter((e) => !entries.includes(e))
+  if (lines.length) log(board, `archived: ${lines.map((l) => l.split(' (')[0]).join(', ')}`)
+  save(board)
+  return { count, lines }
 }
 
 // ---- commands ----
@@ -441,30 +512,18 @@ const commands = {
     if (!removed.length && !settled.length) console.log('nothing to clean')
   },
 
-  // Moves merged tasks and answered decisions off the board into <state>/archive/done-YYYY-MM.md
-  // (the file `state archive` appends to), so nothing is deleted without a record. --dry-run lists only.
+  // Moves finished items (merged tasks, answered decisions, done instructions) off the board into
+  // <state>/archive/done-YYYY-MM.md (the file `state archive` appends to), so nothing is deleted without
+  // a record. Open items never move. --older-than <hours> keeps what finished more recently;
+  // --dry-run lists only. `reconcile` runs the same code with the configured retention window.
   archive() {
     const board = load()
-    const tasks = board.tasks.filter((t) => t.status === 'merged')
-    const decisions = board.decisions.filter((d) => d.status === 'answered')
+    const hours = option('older-than')
+    if (hours !== undefined && !(Number(hours) >= 0)) throw new Error('--older-than needs a number of hours')
     const dry = flag('dry-run') || process.argv.includes('-n')
-    for (const t of tasks) console.log(`${dry ? 'would archive' : 'archived'} task ${t.id} (merged${t.pr ? ` #${t.pr}` : ''})`)
-    for (const d of decisions) console.log(`${dry ? 'would archive' : 'archived'} decision ${d.id} (answered: ${d.title})`)
-    if (!tasks.length && !decisions.length) return void console.log('nothing to archive')
-    if (dry) return
-    const day = now().slice(0, 10)
-    const file = path.join(STATE_DIR, 'archive', `done-${day.slice(0, 7)}.md`)
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    const entries = [
-      ...tasks.map((t) => `- task ${t.id}${t.repo ? ` · ${t.repo}` : ''}${t.pr ? ` · #${t.pr}` : ''} — merged${t.mergedAt ? ` ${t.mergedAt}` : ''}${t.detail ? ` — ${t.detail}` : ''}`),
-      ...decisions.map((d) => `- decision ${d.id}: ${d.title} — ${d.answer || 'answered'}${d.url ? ` — ${d.url}` : ''}`)
-    ]
-    if (!fs.existsSync(file)) fs.writeFileSync(file, `# Done ${day.slice(0, 7)}\n`)
-    fs.appendFileSync(file, `\n## ${day} (board)\n${entries.join('\n')}\n`)
-    board.tasks = board.tasks.filter((t) => !tasks.includes(t))
-    board.decisions = board.decisions.filter((d) => !decisions.includes(d))
-    log(board, `archived: ${[...tasks.map((t) => t.id), ...decisions.map((d) => `decision ${d.id}`)].join(', ')}`)
-    save(board)
+    const moved = archiveFinished(board, { cutoff: hours === undefined ? null : Date.now() - Number(hours) * 3600000, dry })
+    if (!moved.count) return void console.log('nothing to archive')
+    for (const line of moved.lines) console.log(`${dry ? 'would archive' : 'archived'} ${line}`)
   },
 
   'instruction:add'(text) {
@@ -566,6 +625,12 @@ const commands = {
     }
     if (settled.length) save(board)
     for (const id of settled) console.log(`settled ${id}`)
+    // Retention: finished items older than board.retentionHours leave the board (model-free, rides the panel's refresh).
+    const hours = retentionHours()
+    if (hours > 0) {
+      const moved = archiveFinished(board, { cutoff: Date.now() - hours * 3600000 })
+      for (const line of moved.lines) console.log(`archived ${line}`)
+    }
   },
 
   'decision:rm'(id) {
@@ -681,7 +746,7 @@ commands:
   agent:set <name> <${AGENT_STATES.join('|')}> [--id <dispatch>] [--repo ..] [--role ..] [--detail ..]
   agent:rm <name>                     remove an agent from the board (never the coordinator)
   clean                               prune idle/stopped agents and answered decisions
-  archive [--dry-run]                 move merged tasks and answered decisions to archive/done-YYYY-MM.md
+  archive [--dry-run] [--older-than H] move finished items to archive/done-YYYY-MM.md (reconcile does this after board.retentionHours)
   instruction:add <text>              record a standing instruction from the human
   instruction:set <id> [--status ${INSTRUCTION_STATES.join('|')}] [--text ..]
   ask <title> [--repo ..] [--url ..] [--action <verb>] [--context ..] [--options "id:Label*|id:Label"] [--recommend <id>] [--settles-when ${SETTLES_WHEN.join('|')}] [--oncall]

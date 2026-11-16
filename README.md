@@ -261,6 +261,11 @@ the main checkout; `paths.worktreeRoot`, when set, only narrows the list); runs
 `git worktree prune` for stale entries; and moves merged tasks and answered decisions off the
 board into `archive/done-YYYY-MM.md`.
 
+Finished items also leave the board by themselves: the panel's refresh runs `board reconcile`, which
+moves merged tasks, answered decisions, done instructions and log entries older than
+`board.retentionHours` (default 24; `0` keeps them until Clean up) into the same archive file. Open
+items never move, and the same `archive` code does both.
+
 The gear opens the settings described under Install; a `repos` entry in `config.yaml` that is
 not a git repository is listed there with a **Remove from repositories** button (it is
 ignored everywhere until then).

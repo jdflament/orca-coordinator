@@ -11,7 +11,7 @@
 import fs from 'node:fs'
 import { parseYaml, toYaml } from './yaml.mjs'
 
-export const CONFIG_VERSION = 3
+export const CONFIG_VERSION = 4
 export const BOARD_VERSION = 2
 
 /** Steps of a version: { to, apply }. apply gets the data (config: the file text) and returns the migrated data. */
@@ -53,6 +53,27 @@ export const CONFIG_STEPS = [
       if (!block || typeof block !== 'object' || block.enabled !== true || 'jobs' in block) return stamped
       const header = /^(#[^\n]*\n)+/.exec(stamped)?.[0] ?? ''
       return header + toYaml({ ...data, automations: { ...block, jobs: JOBS_AT_V3.map((j) => ({ ...j })) } })
+    }
+  },
+  {
+    // board.retentionHours: finished board items are archived after this many hours (default 24).
+    // Text edit, so the user's comments and layout survive; an existing value is never replaced.
+    to: 4,
+    apply(text) {
+      const stamped = text.replace(/^schemaVersion:.*$/m, 'schemaVersion: 4')
+      const data = parseYaml(stamped) || {}
+      if (data.board && typeof data.board === 'object' && 'retentionHours' in data.board) return stamped
+      const block = /^board:[ \t]*\n/m.exec(stamped)
+      if (block) {
+        const at = block.index + block[0].length
+        return `${stamped.slice(0, at)}  retentionHours: 24\n${stamped.slice(at)}`
+      }
+      if (/^board:/m.test(stamped)) {
+        // flow style or odd layout: re-serialize, keeping every key (the backup keeps the comments)
+        const header = /^(#[^\n]*\n)+/.exec(stamped)?.[0] ?? ''
+        return header + toYaml({ ...data, board: { ...(data.board && typeof data.board === 'object' ? data.board : {}), retentionHours: 24 } })
+      }
+      return `${stamped}${stamped.endsWith('\n') ? '' : '\n'}board:\n  retentionHours: 24\n`
     }
   }
 ]
