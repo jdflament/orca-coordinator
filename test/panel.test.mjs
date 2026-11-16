@@ -78,7 +78,7 @@ test('closing an idle session asks in its own row (not in the top banner) and cl
 // ---- DOM-free helpers: grouping, clickability, collapsible features ----
 const pure = html.match(/\/\/ <pure>[\s\S]*?\/\/ <\/pure>/)?.[0]
 assert.ok(pure, 'panel has a <pure> block')
-const { planWork, groupByRepo, canOpen, featureOpen, featureCounts, loadFolds, saveFolds } = vm.runInNewContext(`${pure}\n;({ planWork, groupByRepo, canOpen, featureOpen, featureCounts, loadFolds, saveFolds })`)
+const { planWork, groupByRepo, canOpen, featureOpen, featureCounts, loadFolds, saveFolds, newestFirst } = vm.runInNewContext(`${pure}\n;({ planWork, groupByRepo, canOpen, featureOpen, featureCounts, loadFolds, saveFolds, newestFirst })`)
 const plain = (value) => JSON.parse(JSON.stringify(value))
 
 const task = (id, repo, ws = 'W1', extra = {}) => ({ id, ws, repo, status: 'working', ...extra })
@@ -180,4 +180,9 @@ test('folds: no storage, failing storage or garbage still work (nothing remember
 test('featureCounts: open, blocked and needs-input; done items are not open', () => {
   assert.equal(featureCounts([entry('working'), entry('blocked'), entry('merged'), entry('pr'), entry('needs-input')]), '4 open · 1 blocked · 1 needs input')
   assert.equal(featureCounts([entry('merged'), entry('done')]), '')
+})
+
+test('newestFirst: Needs you is newest first; entries without a time go last in their given order', () => {
+  const entries = [{ id: 'worker-a' }, { id: 'old', at: '2026-01-01T10:00:00Z' }, { id: 'new', at: '2026-03-01T10:00:00Z' }, { id: 'worker-b', at: 'garbage' }, { id: 'mid', at: '2026-02-01T10:00:00Z' }]
+  assert.deepEqual(plain(newestFirst(entries)).map((e) => e.id), ['new', 'mid', 'old', 'worker-a', 'worker-b'])
 })
