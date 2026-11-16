@@ -72,7 +72,7 @@ test('closing an idle session asks in its own row (not in the top banner) and cl
   const close = made.filter((n) => n.textContent === 'Close').at(-1)
   assert.ok(made.some((n) => /Close session\?/.test(n.textContent)), 'the question is a row element')
   await close.onclick()
-  assert.deepEqual(panel.calls.filter((c) => c.name === 'board.closeSession').map((c) => c.params), [{ dispatchId: 'ctx_1' }])
+  assert.equal(JSON.stringify(panel.calls.filter((c) => c.name === 'board.closeSession').map((c) => c.params)), '[{"dispatchId":"ctx_1"}]')
 })
 
 // ---- DOM-free helpers: grouping, clickability, collapsible features ----
