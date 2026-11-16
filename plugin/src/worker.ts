@@ -430,7 +430,7 @@ async function getBoard(seen?: string[]): Promise<BoardView> {
 }
 
 /** A dry run only looks: it gets a short deadline and, past it, returns what it found so far instead of failing. */
-const PREVIEW_TIMEOUT_MS = 90000
+const PREVIEW_TIMEOUT_MS = 20000
 
 /** Runs <dir>/bin/cleanup (with -n: a dry run that changes nothing) and reads its summary line. */
 function runCleanup(dir: string, dryRun: boolean, scope?: CleanupScope): Promise<CleanupResult> {

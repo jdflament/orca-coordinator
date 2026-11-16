@@ -36,7 +36,7 @@ released=0; removed=0; kept=0; archived=0
 
 # Read-only calls (orca list commands, gh) get a deadline, so one slow or hung call degrades to
 # "unknown" instead of stalling the whole run. Removals and releases are never bounded.
-CALL_TIMEOUT="${CLEANUP_CALL_TIMEOUT:-15}"
+CALL_TIMEOUT="${CLEANUP_CALL_TIMEOUT:-10}"
 bounded() {
   "$@" & local pid=$!
   { sleep "$CALL_TIMEOUT"; kill "$pid"; } >/dev/null 2>&1 & local dog=$!
