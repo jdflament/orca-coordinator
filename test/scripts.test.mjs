@@ -264,6 +264,40 @@ test('cleanup.sh: merged tasks and answered decisions are archived, open ones st
   assert.match(text, /decision 1: Ship it\?/)
 })
 
+test('cleanup.sh scopes: each flag touches only its own kind, a dry run writes nothing, an unknown flag is refused', () => {
+  const f = worktreeFixture()
+  const done = f.add('done')
+  f.configure({ workers: [{ dispatchId: 'ctx_done', state: 'succeeded', liveness: 'exited', terminalState: 'retained', terminal: 'term_done' }] })
+  const board = (...args) => spawnSync(process.execPath, [path.join(ROOT, 'bin', 'board.mjs'), ...args], { encoding: 'utf8', env: { ...f.box.env, COORDINATOR_STATE: f.box.state, ORCA_COORDINATOR_CONFIG: f.box.configPath } })
+  const tasks = () => JSON.parse(board('show', '--json').stdout).tasks.length
+  board('init')
+  board('task:add', 'T-1', '--status', 'merged', '--pr', '5')
+  const mutations = () => f.box.calls('orca').filter((a) => a[1] === 'worker-release' || (a[0] === 'worktree' && a[1] === 'rm')).map((a) => a[1])
+
+  const dry = f.box.run('bin/cleanup.sh', ['-n', '--workspaces', '--sessions', '--board'])
+  assert.match(dry.out, /would release/)
+  assert.match(dry.out, /would remove/)
+  assert.match(dry.out, /would archive/)
+  assert.deepEqual(mutations(), [])
+  assert.equal(tasks(), 1)
+
+  const sessions = f.box.run('bin/cleanup.sh', ['--sessions'])
+  assert.deepEqual(mutations(), ['worker-release'], 'sessions scope releases only')
+  assert.equal(tasks(), 1)
+  assert.match(sessions.out, /removed 0 worktrees.*archived 0/)
+
+  f.box.run('bin/cleanup.sh', ['--board'])
+  assert.equal(tasks(), 0, 'board scope archives')
+  assert.deepEqual(mutations(), ['worker-release'], 'board scope removes no worktree and releases nothing')
+
+  f.box.run('bin/cleanup.sh', ['--workspaces'])
+  assert.deepEqual(mutations(), ['worker-release', 'rm'], 'workspaces scope removes the worktree')
+  assert.ok(f.removed().includes(`path:${done.dir}`))
+
+  const bad = f.box.run('bin/cleanup.sh', ['--nope'])
+  assert.equal(bad.status, 2)
+})
+
 // ---- adapters ----
 
 const slackBox = (secretRef) => {

@@ -24,7 +24,7 @@ runtime state). `cfg.x` names a key in `config.yaml`.
 | Board agents: live Orca workers from `worker-list`; `B agent:set` only for agents Orca does not report | `rules/60-board.md`, `bin/board.mjs` | — | — |
 | Panel clicks: `terminal send "<option> <id>"` to the live coordinator; `inbox.jsonl` fallback when it is offline | `plugin/src/worker.ts`, `bin/board.mjs inbox` | — | plugin setting `coordinatorDir` |
 | Priority badge (`oncall` field) | panel, schema, `board.mjs --oncall` | — | `board.oncallLabel` |
-| Cleanup script (zero model) + panel ⋯ menu item: dry-run preview, then Confirm, then a feedback line | `bin/cleanup.sh` (`-n`), plugin handler `board.cleanup` | — | `paths.worktreeRoot` |
+| Cleanup script (zero model, scopes --workspaces/--sessions/--board) + three panel ⋯ menu items: dry-run preview, then Confirm, then a feedback line | `bin/cleanup.sh` (`-n`), plugin handler `board.cleanup` | — | `paths.worktreeRoot` |
 | Status line ◆ COORDINATOR / WORKER (WORKER read from the plugin's own `<state>/worker-terminals`) | `bin/statusline.sh` | `~/.claude/settings.json` by `init --statusline` or `orca-coordinator statusline`; previous command in `<state>/statusline-chain` | `agents.coordinator.statusline` |
 | Worker self-identification footer in every spec, ◆ tab title | `rules/10-session.md`, `playbooks/_preamble.md` | — | `person.name` |
 | Optional rule `drafts`: the human's language and tone (both optional), UI terms kept, never post, no "I recommend" in text they post, ≤2 proof links | `rules/optional/drafts.md` | `person.voiceFile` | `person.*` |

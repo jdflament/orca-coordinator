@@ -14,7 +14,7 @@ Three folds:
 
 1. **Board and panel.** `board.json` (schema inside) holds what needs you, the work by
    ticket, other PRs and running workers. An Orca sidebar panel shows it with imperative
-   buttons (Merge, Skip, Explain, nudge, stop) and a zero-model **Clean up** (⋯ menu).
+   buttons (Merge, Skip, Explain, nudge, stop) and three zero-model clean ups (⋯ menu: Orca workspaces, inactive sessions, board).
 2. **Playbooks and automations with prechecks.** Playbook templates (PR comments, PR
    review, ticket triage, cleanup, weekly eval, playbook regression) rendered as specs
    for workers; you choose which, if any, to schedule. Orca runs them on a schedule only when a shell precheck says something
@@ -250,16 +250,22 @@ configured repo with uncommitted or unpushed changes no board task covers, which
 repo in Orca's Source Control), **Agents** (board agents and live workers with stop; the
 heading opens Orca's Workspace Board).
 
-**Clean up** (⋯ menu) first runs `bin/cleanup -n`, a dry run that changes nothing, and shows
-what it would do ("Close 2 finished worker tabs · Remove 1 done worktree · Archive 3 finished
-board items", every item listed by group with its reason, and what it keeps). Only **Confirm**
-runs it. It releases settled worker terminals (never the coordinator's, never a live worker);
-asks Orca (`orca worktree list` / `rm`) for its worktrees and removes those whose branch is
-merged into the default branch or whose PR is merged or closed, with no local changes, no
-commits that are neither in the PR nor on a remote, and no live worker or open terminal (never
-the main checkout; `paths.worktreeRoot`, when set, only narrows the list); runs
-`git worktree prune` for stale entries; and moves merged tasks and answered decisions off the
-board into `archive/done-YYYY-MM.md`.
+The ⋯ menu has three clean ups. Each first runs `bin/cleanup -n --<scope>`, a dry run that
+changes nothing, and shows what it would do (every item listed with its reason); only
+**Confirm** runs it.
+
+- **Clean up Orca workspaces** (`--workspaces`): asks Orca (`orca worktree list` / `rm`) for its
+  worktrees and removes those whose branch is merged into the default branch or whose PR is
+  merged or closed, with no local changes, no commits that are neither in the PR nor on a remote,
+  and no live worker or open terminal (never the main checkout; `paths.worktreeRoot`, when set,
+  only narrows the list). Also runs `git worktree prune` for stale entries.
+- **Clean up inactive sessions** (`--sessions`): releases settled worker terminals (never the
+  coordinator's, never a running worker).
+- **Clean up board** (`--board`): moves merged tasks and answered decisions off the board into
+  `archive/done-YYYY-MM.md` (a call to `board.mjs archive`).
+
+`bin/cleanup` with no scope flag does all three, as before (for scripts, automations and the
+"cleanup now" rule); flags combine.
 
 Finished items also leave the board by themselves: the panel's refresh runs `board reconcile`, which
 moves merged tasks, answered decisions, done instructions and log entries older than
