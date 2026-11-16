@@ -3,7 +3,7 @@
 // terminal (or queues them in inbox.jsonl when no coordinator is live). Before the coordinator
 // is set up, it offers the setup instead (see setup.ts).
 import { execFile } from 'node:child_process'
-import { appendFileSync, mkdirSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync } from 'node:fs'
 import { readFile, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { OrcaWorkerApi } from 'orca/worker'
@@ -371,7 +371,8 @@ let reconciling = false
  */
 function reconcileDecisions(dir: string): void {
   const nowMs = Date.now()
-  if (reconciling || nowMs - lastReconcile < RECONCILE_EVERY_MS) return
+  // Nothing to run before the package is installed (bin/board is missing): not an error, not logged.
+  if (reconciling || nowMs - lastReconcile < RECONCILE_EVERY_MS || !existsSync(path.join(dir, 'bin', 'board'))) return
   lastReconcile = nowMs
   reconciling = true
   execFile(path.join(dir, 'bin', 'board'), ['reconcile'], { timeout: RECONCILE_TIMEOUT_MS }, (error, _stdout, stderr) => {

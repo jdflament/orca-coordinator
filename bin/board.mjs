@@ -96,6 +96,39 @@ function load() {
   return merged
 }
 
+// Every verb reads the board, changes it and writes it back; two processes doing that at once lose one
+// of the writes (the panel's background reconcile runs beside the coordinator's own verbs). A verb holds this
+// lock (an atomic mkdir next to board.json) from its read to its write; a lock left by a crashed process
+// is taken over after 30s.
+const LOCK_DIR = `${BOARD_FILE}.lock`
+const LOCK_WAIT_MS = 15000
+const LOCK_STALE_MS = 30000
+
+function withBoardLock(fn) {
+  fs.mkdirSync(path.dirname(BOARD_FILE), { recursive: true })
+  const started = Date.now()
+  for (;;) {
+    try {
+      fs.mkdirSync(LOCK_DIR)
+      break
+    } catch (err) {
+      if (err.code !== 'EEXIST') throw err
+      try {
+        if (Date.now() - fs.statSync(LOCK_DIR).mtimeMs > LOCK_STALE_MS) fs.rmdirSync(LOCK_DIR)
+      } catch {}
+      if (Date.now() - started > LOCK_WAIT_MS) throw new Error(`${BOARD_FILE} is busy (lock ${LOCK_DIR}); try again`)
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25)
+    }
+  }
+  try {
+    return fn()
+  } finally {
+    try {
+      fs.rmdirSync(LOCK_DIR)
+    } catch {}
+  }
+}
+
 function save(board) {
   board.updatedAt = now()
   if (board.log.length > LOG_KEPT) board.log = board.log.slice(-LOG_KEPT)
@@ -630,24 +663,27 @@ const commands = {
     }
     if (met_.length) {
       // The gh calls above can take a while and the coordinator writes the board meanwhile: apply to a fresh read, never to the one from before.
-      const fresh = load()
-      for (const m of met_) {
-        const d = fresh.decisions.find((x) => String(x.id) === String(m.id))
-        if (!d || d.status !== 'pending') continue
-        d.status = 'answered'
-        d.answer = 'Settled'
-        d.answeredAt = now()
-        d.note = `settled automatically: ${d.settlesWhen}`
-        log(fresh, `decision ${d.id} settled: ${d.settlesWhen}`)
-        settled.push(d.id)
-      }
-      if (settled.length) save(fresh)
+      withBoardLock(() => {
+        const fresh = load()
+        for (const m of met_) {
+          const d = fresh.decisions.find((x) => String(x.id) === String(m.id))
+          if (!d || d.status !== 'pending') continue
+          d.status = 'answered'
+          d.answer = 'Settled'
+          d.answeredAt = now()
+          d.note = `settled automatically: ${d.settlesWhen}`
+          log(fresh, `decision ${d.id} settled: ${d.settlesWhen}`)
+          settled.push(d.id)
+        }
+        if (settled.length) save(fresh)
+      })
     }
     for (const id of settled) console.log(`settled ${id}`)
     // Retention: finished items older than board.retentionHours leave the board (model-free, rides the panel's refresh).
     const hours = retentionHours()
     if (hours > 0) {
-      const moved = archiveFinished(board, { cutoff: Date.now() - hours * 3600000 })
+      // A fresh read, like the settle above: the gh calls can be slow and the board is written meanwhile.
+      const moved = withBoardLock(() => archiveFinished(load(), { cutoff: Date.now() - hours * 3600000 }))
       for (const line of moved.lines) console.log(`archived ${line}`)
     }
   },
@@ -786,7 +822,9 @@ const [cmd, ...args] = process.argv.slice(2)
 try {
   if (!cmd || cmd === 'help' || cmd === '--help') usage()
   else if (!commands[cmd]) throw new Error(`unknown command: ${cmd}`)
-  else commands[cmd](...args)
+  // reconcile locks only its short read-write steps (its gh calls are slow); the script verbs run other programs that call this CLI.
+  else if (['reconcile', 'lessons', 'metrics', 'state'].includes(cmd)) commands[cmd](...args)
+  else withBoardLock(() => commands[cmd](...args))
 } catch (err) {
   console.error(`board: ${err.message}`)
   process.exit(1)
