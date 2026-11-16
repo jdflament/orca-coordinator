@@ -899,6 +899,19 @@ function doctor() {
 
 // ---- uninstall ----
 
+/** What init and the migrations put in the config folder; anything else there is the human's. */
+function configFiles(configPath) {
+  const dir = path.dirname(configPath)
+  const base = path.basename(configPath)
+  const names = fs.existsSync(dir) ? fs.readdirSync(dir).filter((n) => n.startsWith(`${base}.bak-v`)) : []
+  return [configPath, ...names.map((n) => path.join(dir, n)), path.join(dir, 'rules.local.md'), path.join(dir, 'playbooks.local')].filter((f) => fs.existsSync(f))
+}
+
+/** True when this script runs from the copy Orca installed (~/.local/share/orca-coordinator), never from a clone. */
+function installedCopy() {
+  return PACKAGE_ROOT === path.join(os.homedir(), '.local', 'share', 'orca-coordinator') && fs.existsSync(path.join(PACKAGE_ROOT, 'orca-plugin.json'))
+}
+
 async function uninstall() {
   // Purging deletes reports, lessons and config: without a terminal to ask on, only --yes allows it.
   if (has('purge') && !YES && !DRY && !process.stdin.isTTY) {
@@ -945,19 +958,24 @@ async function uninstall() {
   if (has('purge')) {
     if (!YES && !DRY) {
       const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-      const answer = (await rl.question(`Delete ${config.paths.state} and ${configPath}? This removes state.md, reports, lessons and your config. [y/N] `)).trim().toLowerCase()
+      const list = [config.paths.state, ...configFiles(configPath), ...(installedCopy() ? [PACKAGE_ROOT] : [])]
+      const answer = (await rl.question(`Delete ${list.join(', ')}? This removes state.md, reports, lessons, your config and the installed package copy, with no backup. [y/N] `)).trim().toLowerCase()
       rl.close()
       if (answer !== 'y') return report()
     }
     did('delete', config.paths.state)
     if (!DRY) fs.rmSync(config.paths.state, { recursive: true, force: true })
     // The config file and what init put next to it; the folder only when nothing else is left in it.
-    for (const file of [configPath, path.join(configDir, 'rules.local.md'), path.join(configDir, 'playbooks.local')]) {
-      if (!fs.existsSync(file)) continue
+    for (const file of configFiles(configPath)) {
       did('delete', file)
       if (!DRY) fs.rmSync(file, { recursive: true, force: true })
     }
     if (!DRY && fs.existsSync(configDir) && fs.readdirSync(configDir).length === 0) fs.rmdirSync(configDir)
+    // The package copy Orca installed, last: the files of this run are already loaded.
+    if (installedCopy()) {
+      did('delete', `${PACKAGE_ROOT} (installed package copy)`)
+      if (!DRY) fs.rmSync(PACKAGE_ROOT, { recursive: true, force: true })
+    }
   } else did('keep', `${config.paths.state} and ${configPath} (use --purge to delete them)`)
   report()
 }

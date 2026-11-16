@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -396,4 +396,46 @@ test('render: the onboarding-scan playbook runs in the coordinator (no worker pr
   assert.ok(fs.statSync(path.join(box.state, 'bin', 'scan')).mode & 0o100, 'scan wrapper is executable')
   const rules = fs.readFileSync(path.join(box.state, 'COORDINATOR.md'), 'utf8')
   assert.match(rules, /rescan.*onboarding-scan\.md/s)
+})
+
+// ---- uninstall --purge: a reinstall is a fresh start ----
+
+function installCopy(box) {
+  const copy = path.join(box.home, '.local', 'share', 'orca-coordinator')
+  fs.cpSync(ROOT, copy, { recursive: true, filter: (src) => !/[\\/](\.git|node_modules)$/.test(src) })
+  return copy
+}
+const runFrom = (copy, box, args) => spawnSync(process.execPath, [path.join(copy, 'bin', 'coordinator.mjs'), ...args], { env: box.env, encoding: 'utf8' })
+
+test('uninstall --purge from the installed copy leaves nothing of the plugin but touches nothing else', () => {
+  const box = sandbox()
+  box.fake('orca', [anyOk({ automations: [], plugins: [] })])
+  const copy = installCopy(box)
+  const configDir = path.dirname(box.configPath)
+  fs.writeFileSync(`${box.configPath}.bak-v1`, 'old')
+  fs.writeFileSync(path.join(configDir, 'unrelated.txt'), 'mine')
+  fs.mkdirSync(path.join(box.state, 'bin'), { recursive: true })
+  fs.writeFileSync(path.join(box.state, 'state.md'), 'x')
+  const settings = path.join(box.home, '.claude', 'settings.json')
+  fs.mkdirSync(path.dirname(settings), { recursive: true })
+  const mine = { permissions: { allow: ['Bash(ls)'] }, statusLine: { type: 'command', command: path.join(copy, 'bin', 'statusline.sh') } }
+  fs.writeFileSync(settings, JSON.stringify(mine))
+  const out = runFrom(copy, box, ['uninstall', '--purge', '--yes'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.ok(!fs.existsSync(copy), 'installed package copy removed')
+  assert.ok(!fs.existsSync(box.state), 'state removed')
+  assert.ok(!fs.existsSync(box.configPath) && !fs.existsSync(`${box.configPath}.bak-v1`), 'config and its migration backups removed')
+  assert.equal(fs.readFileSync(path.join(configDir, 'unrelated.txt'), 'utf8'), 'mine', 'a file the plugin did not create stays')
+  assert.deepEqual(JSON.parse(fs.readFileSync(settings, 'utf8')), { permissions: mine.permissions }, 'only the statusLine entry it added is gone')
+})
+
+test('uninstall --purge --dry-run lists the package copy and deletes nothing', () => {
+  const box = sandbox()
+  box.fake('orca', [anyOk({ automations: [], plugins: [] })])
+  const copy = installCopy(box)
+  fs.mkdirSync(box.state, { recursive: true })
+  const out = runFrom(copy, box, ['uninstall', '--purge', '--dry-run'])
+  assert.equal(out.status, 0, out.stderr)
+  assert.match(out.stdout, /installed package copy/)
+  assert.ok(fs.existsSync(copy) && fs.existsSync(box.state) && fs.existsSync(box.configPath))
 })
